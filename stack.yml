@@ -1,0 +1,61 @@
+# aitomaton on Docker Swarm.
+#
+#   docker build -t aitomaton:0.1 . && docker build -t aitomaton-laya:0.1 laya
+#   cp .env.example .env && $EDITOR .env
+#   docker stack deploy -c stack.yml aitomaton
+#
+# It reads the swarm through the manager's Docker socket (read only): service labels are the
+# descriptors that tell it where each service's source lives and what it may do about errors.
+version: "3.8"
+
+services:
+  aitomaton:
+    image: aitomaton:0.1
+    env_file: .env
+    environment:
+      LAYA_URL: http://laya:8000
+      # stairway's experiments root, mounted below at the same path: aitomaton clones each repo there
+      # with the service's own git credential before the agent starts
+      STAIRWAY_EXPERIMENTS_ROOT: /srv
+    ports:
+      # published on the host, so stairway (on the host) can call back on http://localhost:8790
+      - "8790:8790"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - state:/state
+      - /srv:/srv
+    # git credentials as Docker secrets: a service labelled aitomaton.git.credential=<name> uses
+    # /run/secrets/aitomaton_git_<name>. Create with: printf %s "$TOKEN" | docker secret create aitomaton_git_<name> -
+    # secrets: [aitomaton_git_shop]
+    networks: [aitomaton]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+      labels:
+        aitomaton.enable: "false"        # do not try to fix yourself
+        # traefik.enable: "true"
+        # traefik.http.routers.aitomaton.rule: Host(`aitomaton.example.org`)
+        # traefik.http.services.aitomaton.loadbalancer.server.port: "8790"
+
+  laya:
+    image: aitomaton-laya:0.1
+    volumes:
+      - laya-cache:/cache                 # the HF checkpoint survives redeploys
+    networks: [aitomaton]
+    deploy:
+      replicas: 1
+      labels:
+        aitomaton.enable: "false"
+
+networks:
+  aitomaton:
+    driver: overlay
+
+# secrets:
+#   aitomaton_git_shop:
+#     external: true
+
+volumes:
+  state:
+  laya-cache:

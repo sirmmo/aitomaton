@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>aitomaton: errors in, fixes out</title>
+<meta name="description" content="aitomaton turns Sentry/urgentry errors into decisions and pull requests. It analyses single errors, bursts and long-term patterns across a Docker Swarm, decides with rules, laya, JEV or any LLM, and lets a coding agent fix code defects through stairway.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f3f1ea;--fg:#16150f;--muted:#66635a;--card:#fffdf7;--line:#dcd8cb;--accent:#c2410c;--accent2:#0f766e;
+--soft:#ebe7da;--code:#1d1c17;--codefg:#ece8da;--ok:#15803d;--warn:#b45309;--bad:#b91c1c}
+@media (prefers-color-scheme:dark){:root{--bg:#12110d;--fg:#ece8da;--muted:#a19d90;--card:#1b1a15;--line:#2f2d25;
+--accent:#fb923c;--accent2:#2dd4bf;--soft:#24221b;--code:#0b0a08;--codefg:#ece8da;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171}}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.6 "Space Grotesk",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent)}
+code,pre,.mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+code{font-size:.88em;background:var(--soft);padding:.1em .35em;border-radius:4px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+nav{display:flex;justify-content:space-between;align-items:center;padding:18px 0}
+nav .logo{font-weight:700;font-size:20px;letter-spacing:-.02em;text-decoration:none;color:var(--fg)}
+nav .logo span{color:var(--accent)}
+nav .links{display:flex;gap:18px;font-size:15px}nav .links a{color:var(--muted);text-decoration:none}nav .links a:hover{color:var(--fg)}
+.hero{padding:56px 0 40px}
+.eyebrow{font:600 13px "JetBrains Mono",monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--accent2)}
+h1{font-size:clamp(40px,7vw,76px);line-height:1;letter-spacing:-.04em;margin:14px 0 22px;font-weight:700}
+h1 em{font-style:normal;color:var(--accent)}
+.lede{font-size:clamp(18px,2.2vw,21px);max-width:720px;color:var(--muted);margin:0}
+.lede b{color:var(--fg);font-weight:500}
+.cta{display:flex;gap:12px;flex-wrap:wrap;margin-top:30px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:11px 18px;border-radius:10px;text-decoration:none;font-weight:500;font-size:16px;border:1px solid var(--line);color:var(--fg);background:var(--card)}
+.btn.primary{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.btn:hover{transform:translateY(-1px)}
+section{padding:56px 0;border-top:1px solid var(--line)}
+h2{font-size:clamp(28px,4vw,40px);letter-spacing:-.03em;line-height:1.1;margin:0 0 14px}
+.sub{color:var(--muted);max-width:700px;margin:0 0 30px}
+.flow{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;counter-reset:step}
+.step{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;position:relative}
+.step::before{counter-increment:step;content:"0" counter(step);font:600 12px "JetBrains Mono",monospace;color:var(--accent)}
+.step h3{margin:6px 0 6px;font-size:18px}.step p{margin:0;font-size:14.5px;color:var(--muted)}
+.step:not(:last-child)::after{content:"→";position:absolute;right:-12px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:16px;z-index:1}
+.matrix{display:grid;grid-template-columns:150px repeat(3,1fr);border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--card)}
+.matrix div{padding:14px 16px;border-bottom:1px solid var(--line);border-right:1px solid var(--line);font-size:15px}
+.matrix .h{font:600 12px "JetBrains Mono",monospace;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);background:var(--soft)}
+.matrix .r{font-weight:700}
+.matrix div:nth-child(4n){border-right:0}.matrix div:nth-last-child(-n+4){border-bottom:0}
+.matrix .na{color:var(--muted)}
+.chain{display:flex;align-items:stretch;gap:0;flex-wrap:wrap}
+.tier{flex:1 1 180px;background:var(--card);border:1px solid var(--line);padding:18px;margin:0 -1px -1px 0}
+.tier:first-child{border-radius:14px 0 0 14px}.tier:last-child{border-radius:0 14px 14px 0}
+.tier .tag{font:600 11px "JetBrains Mono",monospace;text-transform:uppercase;letter-spacing:.07em;color:var(--accent2)}
+.tier h3{margin:4px 0 6px;font-size:20px}.tier p{margin:0;font-size:14.5px;color:var(--muted)}
+.tier .cost{margin-top:10px;font:12px "JetBrains Mono",monospace;color:var(--muted)}
+.note{margin-top:16px;font-size:15px;color:var(--muted)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:start}
+pre{background:var(--code);color:var(--codefg);border-radius:14px;padding:18px 20px;overflow:auto;font-size:13.5px;line-height:1.55;margin:0}
+pre .c{color:#8f8a78}pre .k{color:#fb923c}pre .s{color:#5eead4}
+ul.ticks{list-style:none;padding:0;margin:0}ul.ticks li{padding:10px 0 10px 28px;border-bottom:1px dashed var(--line);position:relative;font-size:15.5px}
+ul.ticks li::before{content:"";position:absolute;left:4px;top:18px;width:10px;height:10px;border-radius:3px;background:var(--accent)}
+ul.ticks li b{font-weight:500}
+.policies{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:22px}
+.pol{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.pol code{background:none;padding:0;font-weight:600;color:var(--accent)}.pol p{margin:6px 0 0;font-size:14px;color:var(--muted)}
+.states{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0}
+.st{font:12.5px "JetBrains Mono",monospace;padding:4px 10px;border-radius:99px;border:1px solid currentColor}
+.st.g{color:var(--ok)}.st.y{color:var(--warn)}.st.r{color:var(--bad)}.st.n{color:var(--muted)}
+.demo{display:block;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:var(--card);text-decoration:none;color:var(--fg)}
+.demo .bar{display:flex;gap:6px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--soft);align-items:center}
+.demo .bar i{width:10px;height:10px;border-radius:50%;background:var(--line)}.demo .bar span{margin-left:10px;font:12px "JetBrains Mono",monospace;color:var(--muted)}
+.demo iframe{display:block;width:100%;height:560px;border:0;pointer-events:none;background:var(--bg)}
+.docs{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.doc{display:block;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--card);text-decoration:none;color:var(--fg)}
+.doc:hover{border-color:var(--accent)}.doc b{display:block;font-size:17px}.doc span{font-size:14px;color:var(--muted)}
+footer{padding:36px 0 56px;border-top:1px solid var(--line);color:var(--muted);font-size:14px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+@media (max-width:860px){
+  .flow{grid-template-columns:1fr 1fr}.step::after{display:none}
+  .two{grid-template-columns:1fr}.policies{grid-template-columns:1fr 1fr}.docs{grid-template-columns:1fr 1fr}
+  .tier,.tier:first-child,.tier:last-child{border-radius:0;flex-basis:100%}.chain{border-radius:14px;overflow:hidden}
+  .matrix{grid-template-columns:110px repeat(3,minmax(150px,1fr));overflow-x:auto}
+  nav .links a.hide{display:none}
+}
+@media (max-width:520px){.flow,.policies,.docs{grid-template-columns:1fr}.demo iframe{height:420px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav>
+  <a class="logo" href="#">ai<span>to</span>maton</a>
+  <div class="links">
+    <a class="hide" href="#how">How</a><a class="hide" href="#decide">Decisions</a><a class="hide" href="#labels">Labels</a>
+    <a href="demo/">Demo</a><a href="https://github.com/sirmmo/aitomaton">GitHub</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="eyebrow">Sentry · urgentry · Prometheus → decisions → pull requests</div>
+  <h1>Errors in.<br><em>Fixes</em> out.</h1>
+  <p class="lede">aitomaton watches the errors of everything running on your <b>Docker Swarm</b>. It reads each one
+    as a single event, as part of a burst, and as a long-term pattern, for one service or across a
+    whole architecture. Then it <b>decides</b> what to do. When the answer is "this is a bug in our code", a coding
+    agent gets a ready-to-push clone and a full brief, and a <b>pull request</b> comes back.</p>
+  <div class="cta">
+    <a class="btn primary" href="demo/">See the live demo</a>
+    <a class="btn" href="https://github.com/sirmmo/aitomaton">Source on GitHub</a>
+    <a class="btn" href="#start">Quick start</a>
+  </div>
+</header>
+</div>
+
+<section id="how"><div class="wrap">
+  <h2>How it works</h2>
+  <p class="sub">One small service with no dependencies beyond Python's standard library. Webhooks or polling bring errors in, and every
+    tick turns them into findings, decisions and work.</p>
+  <div class="flow">
+    <div class="step"><h3>Ingest</h3><p>Sentry / urgentry webhooks and API polling, Alertmanager alerts. Everything becomes per-minute occurrences.</p></div>
+    <div class="step"><h3>Discover</h3><p>Swarm service labels say where each service's source is, what it depends on, and what aitomaton may do.</p></div>
+    <div class="step"><h3>Analyse</h3><p>Single errors, bursts and trends per issue, per service and per architecture, including cascades.</p></div>
+    <div class="step"><h3>Decide</h3><p>Rules, then laya, JEV and an LLM, each asked only when the last is unsure. Capped by policy.</p></div>
+    <div class="step"><h3>Act</h3><p>A stairway space with a prepared clone; the agent fixes, tests and pushes, and aitomaton opens the PR.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <h2>Three horizons, three scopes</h2>
+  <p class="sub">One exception, a storm of them, and a slow creep over two weeks call for different
+    responses. So does a failure in one app versus the whole stack failing because its database did.</p>
+  <div class="matrix">
+    <div class="h"></div><div class="h">issue</div><div class="h">service</div><div class="h">architecture</div>
+    <div class="r">single</div><div>new, regression, level, in-app stack frames</div><div>failed swarm tasks (OOMKilled…)</div><div class="na">n/a</div>
+    <div class="r">burst</div><div>last 5 min vs the 24 h baseline rate</div><div>all of the service's issues together</div><div><b>cascades</b>: services failing together, root from <code>depends</code></div>
+    <div class="r">long term</div><div>14-day trend: rising, chronic</div><div>memory / CPU context from Prometheus</div><div>events and issues per architecture</div>
+  </div>
+  <p class="note">When the front end times out because the database is down, only the database is a root
+    cause. Downstream services are reported, never "fixed".</p>
+</div></section>
+
+<section id="decide"><div class="wrap">
+  <h2>Cheap decisions first</h2>
+  <p class="sub">Every tier answers the same three things: an action (<code>ignore</code>, <code>watch</code>,
+    <code>report</code>, <code>fix</code>), a confidence, and the probability that it is a code defect. The next
+    tier is asked only when the stakes are real and the last answer is unsure or disagrees. A tier that is down
+    hands over to the next.</p>
+  <div class="chain">
+    <div class="tier"><div class="tag">always</div><h3>rules</h3><p>Deterministic severity and code-defect scores from the analysis, memory pressure and cascade position.</p><div class="cost">free · µs</div></div>
+    <div class="tier"><div class="tag">system 1</div><h3>laya</h3><p>Two calibrated yes/no reads in one forward pass: <i>urgent?</i> <i>code defect?</i> 0.96 vs 0.11 for a KeyError vs a full disk.</p><div class="cost">CPU · seconds</div></div>
+    <div class="tier"><div class="tag">router</div><h3>JEV</h3><p>TypeSafe's <code>jev-router</code> on OpenRouter picks the model and reasoning effort per request.</p><div class="cost">OpenRouter · env</div></div>
+    <div class="tier"><div class="tag">system 2</div><h3>LLM</h3><p>Any OpenAI-compatible model, from OpenRouter or local through Ollama or vLLM. It sees what the earlier tiers said.</p><div class="cost">any provider</div></div>
+  </div>
+  <p class="note">Guard rails no model can override: no repo means no fix; an unlikely code defect means no fix; the
+    service's policy caps the action.</p>
+</div></section>
+
+<section id="labels"><div class="wrap two">
+  <div>
+    <h2>The swarm is the configuration</h2>
+    <p class="sub">There's no registry of apps to keep in sync. Put a few labels on a service and aitomaton knows its repo,
+      its Sentry project, what it depends on, which agent to use, and how far it may go.</p>
+    <ul class="ticks">
+      <li><b>Reads holodocker's labels</b> (<code>holodocker.repo</code>, <code>…repo_ref</code>, <code>…repo_path</code>)</li>
+      <li><b>Never fixes third-party images</b>: an image's source label is only a hint until you opt in</li>
+      <li><b>Credentials by name</b>: the label names a token held in env or a Docker secret; tokens can also be per repo owner or global</li>
+      <li><b>Per-service agent and model</b>: Claude Code, opencode, crush or openclaude, with any OpenRouter model</li>
+    </ul>
+  </div>
+<pre><span class="c"># any service in a stack</span>
+<span class="k">deploy</span>:
+  <span class="k">labels</span>:
+    aitomaton.repo: <span class="s">https://github.com/acme/shop-api</span>
+    aitomaton.ref: <span class="s">main</span>
+    aitomaton.policy: <span class="s">pr</span>          <span class="c"># observe|report|pr|push</span>
+    aitomaton.sentry.project: <span class="s">shop-api</span>
+    aitomaton.depends: <span class="s">db</span>
+    aitomaton.test: <span class="s">pytest -q</span>
+    aitomaton.agent: <span class="s">opencode</span>
+    aitomaton.model: <span class="s">qwen/qwen3-coder</span>
+    aitomaton.git.credential: <span class="s">acme</span>  <span class="c"># a name, not a token</span>
+    aitomaton.notes: <span class="s">"never touch migrations/"</span></pre>
+</div>
+<div class="wrap">
+  <div class="policies">
+    <div class="pol"><code>observe</code><p>Analyse and decide, record only.</p></div>
+    <div class="pol"><code>report</code><p>Open a GitHub issue with the full analysis.</p></div>
+    <div class="pol"><code>pr</code><p>Fix in a stairway space, deliver a pull request.</p></div>
+    <div class="pol"><code>push</code><p>Push to the branch when the tests pass, open a PR otherwise.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap two">
+  <div>
+    <h2>A space to fix it in</h2>
+    <p class="sub">A <code>fix</code> becomes a <a href="https://github.com/sirmmo/stairway">stairway</a> experiment:
+      a folder on your server with a coding agent in it, visible in claude.ai/code so you can watch or take over.</p>
+    <ul class="ticks">
+      <li><b>Prepared clone.</b> aitomaton clones the repo with the service's own token and checks out <code>aitomaton/fix-…</code>. The agent only commits and pushes.</li>
+      <li><b>A complete brief.</b> The stack trace, breadcrumbs, release, analysis and metrics, plus how to deliver under the policy.</li>
+      <li><b>A result protocol.</b> The agent ends with <code>AITOMATON-RESULT</code>; aitomaton opens the PR and deletes the credential.</li>
+      <li><b>Bounded.</b> Dry-run by default, plus limits on concurrent and daily fixes, and a cooldown per issue.</li>
+    </ul>
+    <div class="states">
+      <span class="st n">dry-run</span><span class="st y">queued</span><span class="st g">running</span><span class="st y">waiting</span>
+      <span class="st g">done</span><span class="st n">no-fix</span><span class="st r">failed</span>
+    </div>
+  </div>
+<pre><span class="c">## the brief, abridged</span>
+You are aitomaton's fixer. A production error in
+service `billing_api` was judged a code defect.
+
+- GitHub: https://github.com/acme/billing (main)
+- Already cloned in ./repo on aitomaton/fix-5120,
+  with push access configured.
+
+4. Commit and `git push -u origin aitomaton/fix-5120`.
+   Report status "branch": aitomaton opens the PR.
+
+### KeyError: 'vat_rate'
+billing/invoice.py:88 in total
+    rate = country['vat_rate']
+
+<span class="k">AITOMATON-RESULT</span>: {<span class="s">"status"</span>: <span class="s">"branch"</span>,
+  <span class="s">"title"</span>: <span class="s">"Default VAT for countries without a rate"</span>, …}</pre>
+</div></section>
+
+<section id="demo"><div class="wrap">
+  <h2>One JSON, one page</h2>
+  <p class="sub"><code>/status.json</code> lists works in progress, findings, every decision with each tier's reasoning, and the issues with
+    their analysis. The status page renders it. The demo below runs the real engine on a synthetic swarm: a
+    database takes down its stack, a new <code>KeyError</code> bursts, a worker slowly degrades.</p>
+  <a class="demo" href="demo/" aria-label="Open the live demo">
+    <div class="bar"><i></i><i></i><i></i><span>aitomaton · demo/status.json</span></div>
+    <iframe src="demo/" title="aitomaton status page demo" loading="lazy" tabindex="-1"></iframe>
+  </a>
+</div></section>
+
+<section id="start"><div class="wrap two">
+  <div>
+    <h2>Quick start</h2>
+    <p class="sub">Requirements: a swarm manager, a Sentry or <a href="https://urgentry.com">urgentry</a>, and optionally
+      stairway, laya, an OpenRouter key and GitHub tokens. Start in dry-run, read its decisions for a few days,
+      then let it act.</p>
+    <ul class="ticks">
+      <li>Webhook: <code>POST /hooks/sentry</code> (HMAC-verified)</li>
+      <li>Alerts: <code>POST /hooks/alertmanager?token=…</code></li>
+      <li>Agent callbacks: <code>POST /hooks/stairway</code></li>
+      <li>Output: <code>GET /status.json</code> and <code>GET /</code></li>
+    </ul>
+  </div>
+<pre>git clone https://github.com/sirmmo/aitomaton
+cd aitomaton
+docker build -t aitomaton:0.1 .
+docker build -t aitomaton-laya:0.1 laya
+
+cp .env.example .env
+<span class="c"># SENTRY_URL / SENTRY_TOKEN / SENTRY_ORG</span>
+<span class="c"># STAIRWAY_URL / STAIRWAY_TOKEN</span>
+<span class="c"># JEV_MODEL=typesafe/jev-router, LLM_API_KEY</span>
+<span class="c"># AITOMATON_GIT_TOKEN_&lt;OWNER&gt;=…</span>
+<span class="c"># AITOMATON_DISPATCH=0  ← dry run first</span>
+
+docker stack deploy -c stack.yml aitomaton</pre>
+</div></section>
+
+<section><div class="wrap">
+  <h2>Documentation</h2>
+  <p class="sub">All of it lives in the repository.</p>
+  <div class="docs">
+    <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/architecture.md"><b>Architecture</b><span>loop, modules, data model</span></a>
+    <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/labels.md"><b>Service labels</b><span>descriptors, policies, credentials</span></a>
+    <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/analysis.md"><b>Analysis</b><span>bursts, trends, cascades</span></a>
+    <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/decisions.md"><b>Decisions</b><span>rules, laya, JEV, LLM</span></a>
+    <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/works.md"><b>Works</b><span>fix lifecycle, git, reports</span></a>
+    <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/integrations.md"><b>Integrations</b><span>Sentry, Prometheus, stairway…</span></a>
+    <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/configuration.md"><b>Configuration</b><span>every environment variable</span></a>
+    <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/status-json.md"><b>status.json</b><span>the output format</span></a>
+    <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/deployment.md"><b>Deployment &amp; security</b><span>stack, rollout, threat model</span></a>
+  </div>
+</div></section>
+
+<div class="wrap">
+<footer>
+  <span>aitomaton · MIT · by <a href="https://github.com/sirmmo">sirmmo</a></span>
+  <span>works with <a href="https://github.com/sirmmo/stairway">stairway</a> · <a href="https://urgentry.com">urgentry</a> · <a href="https://github.com/convaiinnovations/laya">laya</a> · <a href="https://openrouter.ai">OpenRouter</a></span>
+</footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,6 @@
+state/
+tests/
+laya/
+.env
+.git
+**/__pycache__
