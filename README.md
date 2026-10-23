@@ -12,7 +12,7 @@ fixes it and sends a pull request (or pushes, if the policy allows).
 Which repo each service comes from, and what aitomaton may do about it, are read from **Docker Swarm service
 labels**: the swarm is the configuration.
 
-**Site and live demo:** https://sirmmo.github.io/aitomaton/
+**Site and live demo:** https://ingmmo.com/aitomaton/
 
 ```
  Sentry / urgentry ─┐                      ┌──────────── aitomaton ────────────┐
