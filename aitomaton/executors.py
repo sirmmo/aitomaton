@@ -18,7 +18,10 @@ def experiment_name(prefix, service, issue_key):
 
 
 def fix_branch(issue):
-    return "aitomaton/fix-%s" % re.sub(r"[^\w-]+", "-", issue["key"].split(":")[-1])
+    """Sentry ids are unique; swarm and alert keys need their subject too (swarm:<service>:oom)."""
+    key = issue["key"]
+    tail = key.split(":", 1)[-1] if key.startswith(("swarm:", "prom:")) else key.split(":")[-1]
+    return "aitomaton/fix-%s" % re.sub(r"[^\w-]+", "-", tail).strip("-")
 
 
 def brief(issue, features, decision, service, prom, cfg, prepared=False):
@@ -53,12 +56,41 @@ def brief(issue, features, decision, service, prom, cfg, prepared=False):
         clone = "- Clone it into `./repo` in this folder: `gh repo clone %s repo -- -b %s` (or git clone over https)." % (
             repo, ref)
     det = issue.get("detail") or {}
+    infra = service.get("kind") == "infra"
+    if infra:
+        intro = ("You are aitomaton's fixer. An infrastructure condition on the Docker Swarm (%s) affecting `%s` was "
+                 "analysed and judged fixable by a change to the deployment configuration. Work autonomously; nobody "
+                 "is watching this session live." % (det.get("kind"), issue.get("service") or issue.get("project")))
+        steps = [
+            "1. Find where `%s` is defined in the stack or compose files%s. Read the condition below: task errors, "
+            "resources, placement, image." % (issue.get("service"), " (start from `%s`)" % path if path else ""),
+            "2. Make the smallest deployment change that removes the cause: e.g. raise a memory limit with headroom, "
+            "fix an image tag, relax a placement constraint, move a published port. Never commit secrets. Do not "
+            "deploy, and do not run docker commands against the swarm.",
+            "3. Validate the files (`docker stack config -c <file>` or `docker compose -f <file> config`) or run the "
+            "checks below.",
+        ]
+        not_it = ("5. If it needs hands on the hosts (a dead node, the network, a disk) or an application code "
+                  "change, change nothing and explain why.")
+    else:
+        intro = ("You are aitomaton's fixer. A production error in service `%s` was analysed and judged to be a code "
+                 "defect that you can fix. Work autonomously; nobody is watching this session live." % service["name"])
+        steps = [
+            "1. Locate the cause from the stack trace and the analysis below. Read the code; reproduce it with a test "
+            "when you can.",
+            "2. Make the smallest correct fix, plus a regression test. Do not refactor or touch unrelated code. "
+            "Never commit secrets.",
+            "3. Run the tests.",
+        ]
+        not_it = ("5. If this is not a code defect after all (infrastructure, configuration, an external service), "
+                  "or you cannot fix it with confidence, change nothing and explain why.")
     lines = [
-        "You are aitomaton's fixer. A production error in service `%s` was analysed and judged to be a code defect "
-        "that you can fix. Work autonomously; nobody is watching this session live." % service["name"],
+        intro,
         "",
         "## Repository",
-        "- GitHub: https://github.com/%s (base branch `%s`%s)" % (repo, ref, ", subdirectory `%s`" % path if path else ""),
+        "- GitHub: https://github.com/%s (base branch `%s`%s)%s" % (
+            repo, ref, ", subdirectory `%s`" % path if path else "",
+            ": the infrastructure repository, with the stack files" if infra else ""),
         clone,
         "- Tests: `%s`" % service["test"] if service.get("test") else "- Tests: find out how the project runs its tests.",
     ]
@@ -67,16 +99,11 @@ def brief(issue, features, decision, service, prom, cfg, prepared=False):
     lines += [
         "",
         "## What to do",
-        "1. Locate the cause from the stack trace and the analysis below. Read the code; reproduce it with a test "
-        "when you can.",
-        "2. Make the smallest correct fix, plus a regression test. Do not refactor or touch unrelated code. "
-        "Never commit secrets.",
-        "3. Run the tests.",
+    ] + steps + [
         "4. " + delivery,
         "   The PR description must link the error (%s) and summarise cause and fix. Mention it was prepared by "
         "aitomaton." % (issue.get("url") or issue["key"]),
-        "5. If this is not a code defect after all (infrastructure, configuration, an external service), or you "
-        "cannot fix it with confidence, change nothing and explain why.",
+        not_it,
         "",
         "When you are done, end your final message with exactly one line:",
         result,
@@ -91,6 +118,8 @@ def brief(issue, features, decision, service, prom, cfg, prepared=False):
         "- Release: %s, environment: %s" % (det.get("release"), det.get("environment")),
         "- Link: %s" % (issue.get("url") or "-"),
     ]
+    if infra:
+        lines += ["", "### Condition", "```json", json.dumps(det, indent=1, default=str)[:4000], "```"]
     for e in det.get("exceptions") or []:
         lines += ["", "### %s: %s" % (e.get("type"), e.get("value")), "```"]
         lines += ["%s:%s in %s%s    %s" % (x.get("file"), x.get("line"), x.get("function"),

@@ -62,6 +62,9 @@ on the page, but sends nothing until you turn it on.
 - **Prepared workspaces.** For a fix, aitomaton clones the repo into the stairway experiment with the
   service's own token, so the agent only commits and pushes. aitomaton then opens the PR. Tokens come from
   env vars or Docker secrets, chosen per label, per repo owner, or globally.
+- **The swarm itself, too.** Nodes down, lost quorum, services short of replicas, OOM kills, images that do
+  not pull. These go to an *infrastructure outlet*: the repo with your stack files. There an OOM kill of
+  traefik becomes a PR that raises its memory limit, not an attempt to patch traefik.
 - **One JSON for everything.** `/status.json` lists works in progress, findings, every decision with each
   tier's reasoning, and the issues with their analysis. `/` renders it.
 
@@ -71,6 +74,7 @@ on the page, but sends nothing until you turn it on.
 |---|---|
 | [Architecture](docs/architecture.md) | components, loop, data model, design choices |
 | [Service labels](docs/labels.md) | the descriptor labels, policies, git credentials |
+| [Infrastructure](docs/infrastructure.md) | the swarm itself: nodes, quorum, replicas, OOM kills, and the outlet repo they go to |
 | [Analysis](docs/analysis.md) | bursts, trends, cascades, findings |
 | [Decisions](docs/decisions.md) | rules, laya, JEV, LLM, the chain, guard rails |
 | [Works](docs/works.md) | the fix lifecycle, the agent's result protocol, git handling, reports |

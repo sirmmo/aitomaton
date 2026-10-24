@@ -57,6 +57,7 @@ tr:last-child td{border-bottom:0}td.num{text-align:right;font-variant-numeric:ta
 <div class="stats" id="stats"></div>
 
 <h2>Works <span class="n" id="n-works">0</span></h2><div id="works"></div>
+<h2>Infrastructure <span class="n" id="n-infra">0</span></h2><div id="infra"></div>
 <h2>Active findings <span class="n" id="n-findings">0</span></h2><div id="findings"></div>
 <h2>Decisions <span class="n" id="n-decisions">0</span></h2><div id="decisions"></div>
 <h2>Issues <span class="n" id="n-issues">0</span></h2><div id="issues"></div>
@@ -98,6 +99,7 @@ function render(d) {
     chip("llm · " + c.llm.model, c.llm.configured),
     chip("stairway · " + c.executor.agent, c.executor.stairway), chip("pre-clone with service credentials", c.executor.prepares_clone),
     chip("default policy: " + c.default_policy, true),
+    chip("infrastructure" + (c.infrastructure && c.infrastructure.repo ? " → " + c.infrastructure.repo : ""), c.infrastructure && c.infrastructure.enabled, d.infrastructure && d.infrastructure.error),
   ].join("");
   const w = d.summary.works;
   $("stats").innerHTML = [
@@ -129,6 +131,7 @@ function render(d) {
     else if (f.kind === "cascade") body = `services: ${esc((det.services||[]).join(", "))}<br>root: <b>${esc(det.root)}</b> (${esc(det.reason)})`;
     else if (f.kind === "rising") body = `trend ${(det.trend*100).toFixed(0)}%/day ${spark(det.daily)}`;
     else if (f.kind === "chronic") body = `active ${esc(det.days_active)} days`;
+    else if (f.kind === "infrastructure") body = `${esc((det.condition || "").replace(/_/g, " "))} · ${esc(det.service || "")}`;
     else if (f.kind === "task_failures") body = `${esc(det.failed_tasks_1h)} failed tasks in 1h<br><span class="mono">${esc(det.error||"")}</span>`;
     else body = esc(det.service || "");
     return `<div class="card"><div class="top">${badge(f.kind, "")} ${badge(f.scope, "")} ${sev(f.severity)}</div>
@@ -136,6 +139,30 @@ function render(d) {
       <div class="muted" style="margin-top:4px">${body}</div>
       <div class="muted mono" style="margin-top:4px">since ${ago(f.first_at)}</div></div>`; }).join("") + "</div>"
     : empty("Nothing notable right now: no bursts, regressions, rising trends or cascades.");
+
+  // infrastructure: the swarm itself, and where its issues go
+  const inf = d.infrastructure || {};
+  const conds = inf.conditions || [];
+  $("n-infra").textContent = conds.length;
+  if (!inf.enabled) $("infra").innerHTML = empty("Swarm health checks are off (AITOMATON_INFRA=0).");
+  else {
+    const o = inf.outlet || {}, m = inf.managers || {};
+    const outlet = o.repo ? `${link("https://github.com/" + o.repo, o.repo)} <span class="muted mono">${esc(o.ref)}${o.path ? " · " + esc(o.path) : ""}</span> · policy ${badge(o.policy, o.policy === "observe" ? "a-watch" : o.policy === "report" ? "a-report" : "a-fix")} <span class="muted">${esc(o.git || "")}</span>`
+      : `<span class="muted">no repository: infrastructure reports stay on this page (set AITOMATON_INFRA_REPO)</span>`;
+    const byKind = {}; conds.forEach(c => byKind[c.kind] = (byKind[c.kind] || 0) + 1);
+    $("infra").innerHTML = `<div class="card"><div class="top"><strong>${esc(inf.name)}</strong>
+        ${badge(m.total ? `${m.reachable}/${m.total} managers · quorum ${m.quorum}` : "no manager view", m.total && m.reachable >= m.quorum ? "s-done" : "s-failed")}
+        ${Object.entries(byKind).map(([k, n]) => badge(`${n} ${k.replace(/_/g, " ")}`, "l-error")).join(" ")}</div>
+      <div style="margin-top:6px">outlet: ${outlet}</div>
+      ${(inf.service_outlets || []).length ? `<div class="muted" style="margin-top:4px">per-service outlets: ${inf.service_outlets.map(r => esc(r)).join(", ")}</div>` : ""}
+      ${inf.error ? `<div style="margin-top:4px;color:var(--bad)">${esc(inf.error)}</div>` : ""}
+      ${(inf.advisories || []).length ? `<ul class="trail">${inf.advisories.map(a => `<li>${esc(a.text)}</li>`).join("")}</ul>` : ""}</div>` +
+      (table(["node", "role", "state", "availability", "engine", "cpus", "memory"], (inf.nodes || []).map(n => `<tr>
+        <td class="mono">${esc(n.hostname)}${n.leader ? ' <span class="tag">leader</span>' : ""}<div class="muted">${esc(n.addr || "")}</div></td>
+        <td>${esc(n.role)}${n.reachability && n.reachability !== "reachable" ? " " + badge(n.reachability, "s-failed") : ""}</td>
+        <td>${badge(n.state, n.state === "ready" ? "s-done" : "s-failed")}</td><td>${esc(n.availability)}</td>
+        <td class="mono">${esc(n.engine)}</td><td class="num">${esc(n.cpus)}</td><td class="num">${esc(n.memory_gb)} GB</td></tr>`)) || "");
+  }
 
   // decisions
   $("n-decisions").textContent = d.decisions.length;
@@ -171,14 +198,17 @@ function render(d) {
     : empty("No architectures discovered.");
 
   // services
-  const svcs = d.services.filter(x => x.enabled || x.failed_tasks_1h);
+  const short = x => x.replicas && x.replicas.desired && x.replicas.running < x.replicas.desired;
+  const svcs = d.services.filter(x => x.enabled || x.failed_tasks_1h || x.infra_repo || short(x));
   $("n-services").textContent = d.services.length;
-  $("services").innerHTML = table(["service", "architecture", "repo", "policy", "git credential", "sentry", "failed tasks 1h"], svcs.map(x => `<tr>
+  $("services").innerHTML = table(["service", "architecture", "repo", "policy", "git credential", "sentry", "replicas", "failed tasks 1h"], svcs.map(x => `<tr>
     <td class="mono">${esc(x.name)}</td><td>${esc(x.architecture)}</td>
-    <td>${x.repo ? link("https://github.com/" + x.repo, x.repo) + ` <span class="muted mono">${esc(x.ref)}</span>` : '<span class="muted">—</span>'}</td>
+    <td>${x.repo ? link("https://github.com/" + x.repo, x.repo) + ` <span class="muted mono">${esc(x.ref)}</span>` : '<span class="muted">—</span>'}${x.infra_repo ? `<div class="muted">infra: ${esc(x.infra_repo)}</div>` : ""}</td>
     <td>${badge(x.policy, x.policy === "observe" ? "a-watch" : x.policy === "report" ? "a-report" : "a-fix")}</td>
     <td class="muted" style="font-size:12px">${esc(x.git || "")}</td>
-    <td class="mono">${esc((x.sentry_projects || []).join(", "))}</td><td class="num">${esc(x.failed_tasks_1h || "")}</td></tr>`))
+    <td class="mono">${esc((x.sentry_projects || []).join(", "))}</td>
+    <td class="num">${x.replicas ? `<span class="${short(x) ? "l-error" : ""}">${esc(x.replicas.running)}/${esc(x.replicas.desired)}</span>` : '<span class="muted">global</span>'}</td>
+    <td class="num">${esc(x.failed_tasks_1h || "")}</td></tr>`))
     || empty(`${d.services.length} services discovered, none enabled. Add aitomaton.* labels (or holodocker.repo) to a service.`);
 }
 

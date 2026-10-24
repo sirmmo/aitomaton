@@ -59,7 +59,7 @@ def analyze(store, swarm, cfg, now):
         buckets = defaultdict(int)
         for m, n in series.get(i["key"], []):
             buckets[m] += n
-            if i["service"]:
+            if i["service"] and i["source"] != "swarm":     # conditions are states, not error streams
                 svc_buckets[i["service"]][m] += n
         b = _burst(buckets, now, cfg)
         lt = _long_term(buckets, now, cfg.long_days)
@@ -75,11 +75,16 @@ def analyze(store, swarm, cfg, now):
             "users": i["users"] or 0, "total": i["total"] or 0,
             "has_stacktrace": bool(frames), "in_app_frames": sum(1 for x in frames if x.get("in_app")),
             "source": i["source"],
+            "infra": {"kind": detail.get("kind"), "cause": detail.get("cause")} if i["source"] == "swarm" else None,
             "burst": b, "long_term": lt,
         }
         per_issue[i["key"]] = f
         target = i["key"]
-        if f["new"]:
+        if i["source"] == "swarm":
+            findings.append({"kind": "infrastructure", "scope": "issue", "target": target,
+                             "severity": f["level_weight"], "detail": {"title": i["title"], "service": i["service"],
+                                                                       "condition": detail.get("kind")}})
+        elif f["new"]:
             findings.append({"kind": "new", "scope": "issue", "target": target, "severity": f["level_weight"],
                              "detail": {"title": i["title"], "service": i["service"]}})
         if f["regression"]:

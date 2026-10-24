@@ -63,8 +63,21 @@ UTC.
     "name": "shop_api", "stack": "shop", "architecture": "shop", "enabled": true,
     "repo": "acme/shop-api", "repo_hint": null, "ref": "main", "policy": "pr", "sentry_projects": ["shop-api"],
     "image": "…", "failed_tasks_1h": 0, "last_task_error": null,
-    "git": "env AITOMATON_GIT_TOKEN_ACME"        // where the credential comes from, never the value
-  }]
+    "replicas": {"running": 2, "desired": 2},   // null for global services
+    "git": "env AITOMATON_GIT_TOKEN_ACME",       // where the credential comes from, never the value
+    "infra_repo": null                           // aitomaton.infra.repo, when set
+  }],
+  "infrastructure": {                            // see infrastructure.md
+    "enabled": true, "error": null, "name": "swarm",
+    "outlet": {"repo": "acme/infra", "ref": "main", "path": "stacks/", "policy": "report", "git": "env …"},
+    "service_outlets": ["acme/search-deploy"],
+    "managers": {"total": 3, "reachable": 3, "quorum": 2},
+    "nodes": [{"hostname": "manager-1", "role": "manager", "state": "ready", "availability": "active",
+               "leader": true, "reachability": "reachable", "engine": "27.3.1", "cpus": 4.0, "memory_gb": 15.6}],
+    "advisories": [{"kind": "engine_skew", "target": "nodes", "text": "…"}],
+    "conditions": [{"key": "swarm:edge_traefik:oom", "kind": "oom", "subject": "edge_traefik",
+                    "service": "edge_traefik", "level": "error", "title": "…", "decision": {…}}]
+  }
 }
 ```
 

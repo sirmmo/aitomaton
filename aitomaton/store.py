@@ -212,6 +212,11 @@ class Store:
                    % ",".join("?" * len(OPEN_WORK)), (key,) + OPEN_WORK)
         return r[0] if r else None
 
+    def last_work(self, key, kind, statuses):
+        r = self.q("SELECT * FROM works WHERE key=? AND kind=? AND status IN (%s) ORDER BY id DESC LIMIT 1"
+                   % ",".join("?" * len(statuses)), (key, kind) + tuple(statuses))
+        return r[0] if r else None
+
     def works(self, statuses=None, limit=100):
         if statuses:
             return self.q("SELECT * FROM works WHERE status IN (%s) ORDER BY id DESC LIMIT ?"

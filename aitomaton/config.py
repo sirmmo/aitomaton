@@ -59,6 +59,20 @@ class Config:
         self.label_prefix = _env("AITOMATON_LABEL_PREFIX", "aitomaton")
         self.swarm_refresh = _int("SWARM_REFRESH_SECONDS", 60)
 
+        # the infrastructure itself: swarm health checks, and the outlet its issues go to (a repo holding
+        # the stack files / infrastructure as code). Without a repo, its reports stay on the status page.
+        self.infra = _bool("AITOMATON_INFRA", True)
+        self.infra_name = _env("AITOMATON_INFRA_NAME", "swarm")
+        self.infra_repo = _env("AITOMATON_INFRA_REPO")
+        self.infra_ref = _env("AITOMATON_INFRA_REF", "main")
+        self.infra_path = _env("AITOMATON_INFRA_PATH", "")
+        self.infra_policy = _env("AITOMATON_INFRA_POLICY", "report")
+        self.infra_credential = _env("AITOMATON_INFRA_CREDENTIAL")
+        self.infra_test = _env("AITOMATON_INFRA_TEST")
+        self.infra_notes = _env("AITOMATON_INFRA_NOTES")
+        self.infra_grace = _int("INFRA_GRACE_SECONDS", 300)      # below its replicas this long: a condition
+        self.infra_task_failures = _int("INFRA_TASK_FAILURES", 3)  # failed tasks of one kind per hour
+
         # analysis
         self.burst_window = _int("BURST_WINDOW_SECONDS", 300)
         self.burst_min = _int("BURST_MIN_EVENTS", 10)
@@ -118,6 +132,8 @@ class Config:
                 "prometheus": bool(self.prom_url),
                 "alertmanager_webhook": True,
             },
+            "infrastructure": {"enabled": self.infra, "name": self.infra_name, "repo": self.infra_repo,
+                               "policy": self.infra_policy},
             "laya": bool(self.laya_url),
             "chain": ["rules"] + self.chain,
             "jev": {"model": self.jev_model, "configured": bool(self.jev_model and (

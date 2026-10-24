@@ -37,6 +37,8 @@ services:
 | `aitomaton.notes` | none | free text for the agent: conventions, what not to touch |
 | `aitomaton.git.credential` | none | **name** of the git credential (below) |
 | `aitomaton.git.author` | `AITOMATON_GIT_AUTHOR` | commit identity, `Name <email>` |
+| `aitomaton.infra.repo` | the global outlet (`AITOMATON_INFRA_REPO`) | where this service's **deployment** lives. Infrastructure issues (OOM kills, image pulls, replicas) go here. It works without `aitomaton.enable`, even on third-party images |
+| `aitomaton.infra.path` / `.ref` / `.policy` / `.credential` | the outlet's | stack file, branch, policy and credential name for those issues |
 
 ### Policies
 
@@ -46,6 +48,8 @@ services:
 | `report` | recorded | GitHub issue (or listed on the page) | becomes `report` |
 | `pr` | recorded | GitHub issue | stairway fix, delivered as a pull request |
 | `push` | recorded | GitHub issue | stairway fix, pushed to `ref` when the tests pass (PR otherwise) |
+
+Infrastructure issues follow the outlet's policy, not the service's ([infrastructure.md](infrastructure.md)).
 
 Services without labels are still discovered and analysed (their failing tasks, their part in a cascade),
 but their policy is `observe`.

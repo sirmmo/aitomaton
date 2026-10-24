@@ -26,6 +26,7 @@ A webhook writes to the store and wakes the loop. Each tick runs every step in o
 | `store.py` | SQLite schema and queries. Occurrences are `(issue key, epoch minute, count)` |
 | `swarm.py` | services, descriptor labels, failed tasks, image labels (cached) |
 | `sources/sentry.py` | webhook parsing (integration platform, legacy plugin), HMAC check, event summary, API poller |
+| `sources/swarm_health.py` | the swarm itself: nodes, quorum, replicas, classified task errors → conditions and advisories |
 | `sources/prometheus.py` | Alertmanager parsing, PromQL context queries |
 | `analysis.py` | bursts, long-term trends, cascades; produces per-issue features and findings |
 | `deciders.py` | the prose state, rules, laya, JEV/LLM tiers, the chain, guard rails, policy cap |

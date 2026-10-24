@@ -15,7 +15,7 @@ from .executors import GitHub, Stairway, brief, experiment_name, fix_branch, par
 from .sources.prometheus import Prometheus, parse_alertmanager
 from .sources.sentry import SentryClient, issue_key, parse_webhook, summarize_event
 from .store import OPEN_WORK, Store
-from .swarm import Swarm
+from .swarm import POLICIES, Swarm, normalize_repo
 
 log = logging.getLogger("aitomaton")
 
@@ -48,6 +48,7 @@ class Engine:
         flags = {}
         if i.get("regression"):
             flags["regression"] = True
+            flags["fired_at"] = time.time()     # a new episode: it may be reported again
         if i.get("action") == "resolved":
             flags["regression"] = False
         fields = dict(source=source, project=project, external_id=i.get("id"),
@@ -113,7 +114,7 @@ class Engine:
 
     def _open_pr(self, w, res):
         issue = self.store.issue(w["key"]) or {}
-        service = self.swarm.get(issue.get("service"))
+        service = self.target(issue)
         cred = self.credential(service)
         if not service or not cred["token"]:
             return "failed", None, "branch pushed but no credential to open the PR (%s)" % cred["source"]
@@ -126,6 +127,38 @@ class Engine:
             return "done", url, "opened PR"
         except Exception as e:
             return "failed", None, credentials.redact("opening the PR: %s" % e, cred["token"])
+
+    # ------------------------------------------------------------ where issues go
+    def is_infra(self, issue):
+        """Swarm conditions, and alerts that belong to no known service, are about the infrastructure."""
+        return issue["source"] == "swarm" or (issue["source"] == "prometheus" and not self.swarm.get(issue["service"]))
+
+    def target(self, issue):
+        """The descriptor a decision acts on: the service itself, or for infrastructure issues the outlet."""
+        if not issue:
+            return None
+        if self.cfg.infra and self.is_infra(issue):
+            return self.infra_outlet(self.swarm.get(issue["service"]))
+        return self.swarm.get(issue["service"])
+
+    def infra_outlet(self, service=None):
+        """The infrastructure as a service: its repo holds stack files, so a "fix" is a deployment change.
+        A service's own aitomaton.infra.* labels win over the global AITOMATON_INFRA_* outlet."""
+        c, own = self.cfg, (service or {}).get("infra") or {}
+        mine = bool(own.get("repo"))
+        policy = own.get("policy") or c.infra_policy
+        return {
+            "kind": "infra", "outlet": "service" if mine else "global", "service": (service or {}).get("name"),
+            "name": service["name"] if service else c.infra_name, "short": service["short"] if service else c.infra_name,
+            "architecture": service["architecture"] if service else c.infra_name, "enabled": True,
+            "repo": own["repo"] if mine else normalize_repo(c.infra_repo),
+            "ref": own.get("ref") or (c.infra_ref if not mine else "main"),
+            "path": own.get("path") or ("" if mine else c.infra_path),
+            "policy": policy if policy in POLICIES else "observe",
+            "git_credential": own.get("credential") or (None if mine else c.infra_credential), "git_author": None,
+            "test": c.infra_test, "notes": c.infra_notes, "agent": None, "model": None,
+            "prometheus_selector": (service or {}).get("prometheus_selector"),
+        }
 
     def credential(self, service):
         return credentials.resolve(service, environ=self.cfg.environ, secrets_dir=self.cfg.secrets_dir)
@@ -158,6 +191,8 @@ class Engine:
             if now - self.swarm.refreshed >= self.cfg.swarm_refresh:
                 self.swarm.refresh()
                 self._remap()
+                if self.cfg.infra:
+                    self._ingest_health(now)
             if self.sentry.enabled and now - self.sentry.last_poll >= self.cfg.sentry_poll:
                 self.sentry.poll(self.store, lambda p, i: self._ingest("sentry", p, i))
             self.analysis = analyze(self.store, self.swarm, self.cfg, now)
@@ -166,6 +201,38 @@ class Engine:
             self._follow_works()
             self.store.prune(now - (self.cfg.long_days + 1) * 86400)
             self.last_tick, self.tick_error = now, None
+
+    def _ingest_health(self, now):
+        """Swarm conditions become issues: one occurrence per refresh while a state lasts, one per failed
+        task for task errors. A condition that stops firing is resolved; if it comes back it is a new episode."""
+        h = self.swarm.health
+        if h.get("error"):
+            return      # an unreadable swarm says nothing about which conditions ended
+        firing = set()
+        for c in h["conditions"]:
+            firing.add(c["key"])
+            cur = self.store.issue(c["key"])
+            back = not cur or cur["status"] == "resolved"
+            flags = {"regression": bool(cur), "fired_at": now} if back else {}
+            seen = list((cur["flags"] or {}).get("tasks") or []) if cur else []
+            fresh = [t for t in c["failures"] if t not in seen]
+            n = len(fresh) if c["failures"] else 1
+            if c["failures"]:
+                flags["tasks"] = (seen + fresh)[-200:]
+            svc = self.swarm.get(c["service"])
+            self.store.upsert_issue(
+                c["key"], source="swarm", project=c["subject"], external_id=c["kind"],
+                service=svc["name"] if svc else c["service"] or self.cfg.infra_name,
+                architecture=svc["architecture"] if svc else self.cfg.infra_name,
+                title=c["title"], culprit=c["culprit"], level=c["level"], status="unresolved",
+                first_seen=now, last_seen=now, total=((cur or {}).get("total") or 0) + n, users=0,
+                detail=c["detail"], flags=flags)
+            if back and cur:
+                self.store.x("UPDATE issues SET first_seen=? WHERE key=?", (now, c["key"]))
+            self.store.add_occurrence(c["key"], now, n)
+        for i in self.store.q("SELECT key, flags FROM issues WHERE source='swarm' AND status!='resolved'"):
+            if i["key"] not in firing:
+                self.store.upsert_issue(i["key"], status="resolved", flags={"regression": False})
 
     def _remap(self):
         """Issues stored before the swarm was known get their service and architecture now."""
@@ -196,7 +263,8 @@ class Engine:
             issue = self.store.issue(key)
             if not issue or not self._needs_decision(issue, f, now):
                 continue
-            service = self.swarm.get(issue["service"])
+            app = self.swarm.get(issue["service"])
+            service = self.target(issue)
             if issue["source"] == "sentry" and not issue["detail"].get("exceptions") and self.sentry.enabled:
                 try:
                     ev = self.sentry.latest_event(issue["external_id"])
@@ -207,7 +275,7 @@ class Engine:
                                                  for x in e.get("frames") or [] if x.get("in_app"))
                 except Exception as e:
                     log.warning("latest event for %s: %s", key, e)
-            prom = self.prom.context(service) if service else {}
+            prom = self.prom.context(app) if app else {}
             d = self.decider.decide(issue, f, service, prom)
             policy = service["policy"] if service else "observe"
             applied = cap(d["action"], policy)
@@ -222,7 +290,8 @@ class Engine:
 
     def _start_fix(self, issue, f, d, service, prom, did, now):
         text = brief(issue, f, d, service, prom, self.cfg, prepared=self._prepares(service))
-        name = experiment_name(self.cfg.stairway_prefix, service["name"], issue["key"])
+        label = "infra-" + issue["project"] if service.get("kind") == "infra" else service["name"]
+        name = experiment_name(self.cfg.stairway_prefix, label, issue["key"])
         if not self.cfg.dispatch or not self.stairway.enabled:
             why = "dispatch is off" if not self.cfg.dispatch else "stairway is not configured"
             wid = self.store.add_work(issue["key"], did, "fix", "dry-run", "stairway", text)
@@ -258,6 +327,11 @@ class Engine:
             self._cleanup(self.store.work(wid))
 
     def _report(self, issue, f, d, service, prom, did):
+        prev = self.store.last_work(issue["key"], "report", ("done", "reported"))
+        if prev and prev["created"] >= ((issue["flags"] or {}).get("fired_at") or 0):
+            # one report per episode: an issue that keeps happening must not open an issue every cooldown
+            self.store.update_work(prev["id"], note="still happening (decision %s)" % did)
+            return
         body = report_body(issue, f, d, prom)
         cred = self.credential(service) if service and service.get("repo") else {"token": None}
         if cred["token"] and self.cfg.dispatch:
@@ -295,7 +369,7 @@ class Engine:
                             self.store.works_since(time.time() - 86400, "fix") >= self.cfg.max_per_day:
                         break
                     issue = self.store.issue(w["key"])
-                    service = self.swarm.get(issue["service"]) if issue else None
+                    service = self.target(issue)
                     if service:
                         self.store.update_work(w["id"], status="dispatched")
                         self._dispatch(w["id"], w["ref"], w["brief"], service)
@@ -334,14 +408,18 @@ class Engine:
         } for w in self.store.works(limit=100)]
         services = [dict({k: s.get(k) for k in ("name", "stack", "architecture", "enabled", "repo", "repo_hint", "ref",
                                                 "policy", "sentry_projects", "image", "failed_tasks_1h",
-                                                "last_task_error")},
-                         git=self.credential(s)["source"] if s.get("enabled") else None)
+                                                "last_task_error", "replicas")},
+                         git=self.credential(s)["source"] if s.get("enabled") else None,
+                         infra_repo=(s.get("infra") or {}).get("repo"))
                     for s in sorted(self.swarm.services.values(), key=lambda s: s["name"])]
         archs = {}
         for s in self.swarm.services.values():
             arch = archs.setdefault(s["architecture"], {"name": s["architecture"], "services": 0, "issues": 0,
                                                         "events_24h": 0, "cascade": None})
             arch["services"] += 1
+        if self.cfg.infra:
+            archs.setdefault(self.cfg.infra_name, {"name": self.cfg.infra_name, "services": 0, "issues": 0,
+                                                   "events_24h": 0, "cascade": None})["infrastructure"] = True
         for i in issues:
             if i["architecture"] in archs:
                 archs[i["architecture"]]["issues"] += 1
@@ -378,4 +456,22 @@ class Engine:
             "works": works, "findings": findings, "decisions": decisions, "issues": issues,
             "architectures": sorted(archs.values(), key=lambda x: -x["events_24h"]),
             "services": services,
+            "infrastructure": self._infra_status(issues),
+        }
+
+    def _infra_status(self, issues):
+        h, out = self.swarm.health, self.infra_outlet()
+        return {
+            "enabled": self.cfg.infra, "error": h.get("error"), "name": self.cfg.infra_name,
+            "outlet": {"repo": out["repo"], "ref": out["ref"], "path": out["path"], "policy": out["policy"],
+                       "git": self.credential(out)["source"] if out["repo"] else None},
+            "service_outlets": sorted({s["infra"]["repo"] for s in self.swarm.services.values()
+                                       if (s.get("infra") or {}).get("repo")}),
+            "managers": h.get("managers") or {}, "nodes": h.get("nodes") or [],
+            "advisories": h.get("advisories") or [],
+            "conditions": [{"key": i["key"], "kind": i["key"].rsplit(":", 1)[-1], "subject": i["project"],
+                            "service": i["service"], "level": i["level"], "title": i["title"],
+                            "status": i["status"], "first_seen": i["first_seen"], "last_seen": i["last_seen"],
+                            "decision": i["decision"]}
+                           for i in issues if i["source"] == "swarm" and i["status"] != "resolved"],
         }

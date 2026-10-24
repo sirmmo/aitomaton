@@ -23,6 +23,11 @@ ACTIONS = {
     "fix": "A defect in this service's own source code that a coding agent can fix now: prepare a code change.",
 }
 ORDER = ["ignore", "watch", "report", "fix"]
+# infrastructure conditions: how likely a change to the stack files fixes them (memory limits, image tags,
+# placement, ports). A node that died or a lost quorum needs hands on the hosts, not a commit.
+INFRA_FIXABLE = {"oom": 0.65, "image_pull": 0.55, "unschedulable": 0.55, "port_conflict": 0.6, "crash_loop": 0.3,
+                 "update_paused": 0.35, "under_replicated": 0.25, "node_down": 0.05, "manager_unreachable": 0.05,
+                 "quorum_lost": 0.0}
 POLICY_MAX = {"observe": "watch", "report": "report", "pr": "fix", "push": "fix"}
 
 
@@ -51,6 +56,12 @@ def describe(issue, f, service, prom):
         parts.append("There is no stack trace.")
     if f["source"] == "prometheus":
         parts.append("It is a Prometheus alert, not an application exception.")
+    infra = f.get("infra") or {}
+    if f["source"] == "swarm":
+        parts.append("It is a Docker Swarm infrastructure condition (%s), not an application exception." % (
+            (infra.get("kind") or "?").replace("_", " ")))
+        if infra.get("cause"):
+            parts.append("Probable cause: %s." % infra["cause"])
     parts.append("%d events in the last hour, %d in 24 hours, %d users affected, %d events in total." % (
         f["events_1h"], f["events_24h"], f["users"], f["total"]))
     if f["new"]:
@@ -74,7 +85,12 @@ def describe(issue, f, service, prom):
     ratio = (prom or {}).get("memory_limit_ratio")
     if ratio is not None and ratio > 0.85:
         parts.append("The container uses %.0f%% of its memory limit." % (ratio * 100))
-    if service and service.get("repo"):
+    if service and service.get("kind") == "infra":
+        parts.append("It goes to the infrastructure repository %s, which holds the stack files: a fix there is a "
+                     "deployment change (limits, image tag, placement, ports), not an application code change." % (
+                         service["repo"]) if service.get("repo") else
+                     "No infrastructure repository is configured: it can only be reported.")
+    elif service and service.get("repo"):
         parts.append("Its source is on GitHub at %s." % service["repo"])
     else:
         parts.append("Its source repository is unknown.")
@@ -108,6 +124,10 @@ def rules(issue, f, service, prom):
     if f.get("service_burst"):
         sev += 0.1
         why.append("service burst")
+    infra = f.get("infra") or {}
+    if f["source"] == "swarm":     # a condition is already an aggregate: it fires only past its thresholds
+        sev += 0.3
+        why.append(infra.get("kind") or "condition")
     if f["long_term"]["chronic"] and f["events_24h"]:
         sev += 0.05
         why.append("chronic")
@@ -116,8 +136,13 @@ def rules(issue, f, service, prom):
     code = 0.8 if f["in_app_frames"] else 0.35 if f["has_stacktrace"] else 0.15
     if f["source"] == "prometheus":
         code = 0.1
+    if f["source"] == "swarm":
+        code = INFRA_FIXABLE.get(infra.get("kind"), 0.2)
+        if infra.get("cause"):
+            code = 0.05
+            why.append(infra["cause"])
     ratio = (prom or {}).get("memory_limit_ratio")
-    if ratio is not None and ratio > 0.9:
+    if ratio is not None and ratio > 0.9 and f["source"] != "swarm":   # for infra, near the limit means "raise it"
         code -= 0.3
         why.append("near memory limit")
     if f.get("cascade") and not f.get("cascade_root"):
@@ -161,8 +186,15 @@ class Laya:
     def __init__(self, url):
         self.url = url
 
+    INFRA_QUESTION = {"type": "noul",
+                      "instructions": "A change to the deployment configuration in the infrastructure repository "
+                                      "(stack file: memory limits, image tag, placement, ports) fixes the root cause, "
+                                      "not a dead host, a network outage, or a defect in application code."}
+
     def __call__(self, issue, f, service, prom, state):
-        r = request("POST", self.url + "/predict", {"state": state, "questions": self.QUESTIONS}, timeout=60)
+        qs = dict(self.QUESTIONS, code_defect=self.INFRA_QUESTION) if service and service.get("kind") == "infra" \
+            else self.QUESTIONS
+        r = request("POST", self.url + "/predict", {"state": state, "questions": qs}, timeout=60)
         a = r.get("answers") or {}
         u = (a.get("urgent") or {}).get("noul")
         c = (a.get("code_defect") or {}).get("noul")
@@ -183,6 +215,8 @@ class LLM:
     SYSTEM = ("You are the decision tier of an automated site-reliability agent. You receive one production error "
               "with its analysis (single occurrence, bursts, long-term trend, architecture-wide cascades, metrics). "
               "Decide one action: " + "; ".join("%s = %s" % kv for kv in ACTIONS.items()) +
+              " For an infrastructure issue the target is the infrastructure repository holding the stack files: "
+              "fix = a deployment change there, and code_defect = how likely such a change fixes it."
               " Answer with JSON only: {\"action\": ..., \"confidence\": 0..1, \"code_defect\": 0..1, "
               "\"rationale\": \"one or two sentences\"}.")
 

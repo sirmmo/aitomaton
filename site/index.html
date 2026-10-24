@@ -90,13 +90,13 @@ footer{padding:36px 0 56px;border-top:1px solid var(--line);color:var(--muted);f
 <nav>
   <a class="logo" href="#">ai<span>to</span>maton</a>
   <div class="links">
-    <a class="hide" href="#how">How</a><a class="hide" href="#decide">Decisions</a><a class="hide" href="#labels">Labels</a>
+    <a class="hide" href="#how">How</a><a class="hide" href="#decide">Decisions</a><a class="hide" href="#labels">Labels</a><a class="hide" href="#infra">Infrastructure</a>
     <a href="demo/">Demo</a><a href="https://github.com/sirmmo/aitomaton">GitHub</a>
   </div>
 </nav>
 
 <header class="hero">
-  <div class="eyebrow">Sentry · urgentry · Prometheus → decisions → pull requests</div>
+  <div class="eyebrow">Sentry · urgentry · Prometheus · the swarm itself → decisions → pull requests</div>
   <h1>Errors in.<br><em>Fixes</em> out.</h1>
   <p class="lede">aitomaton watches the errors of everything running on your <b>Docker Swarm</b>. It reads each one
     as a single event, as part of a burst, and as a long-term pattern, for one service or across a
@@ -188,6 +188,34 @@ footer{padding:36px 0 56px;border-top:1px solid var(--line);color:var(--muted);f
   </div>
 </div></section>
 
+<section id="infra"><div class="wrap two">
+  <div>
+    <h2>The swarm itself, too</h2>
+    <p class="sub">Nodes, managers, replicas and task errors are watched like any error stream. Their issues go to an
+      <b>infrastructure outlet</b>: the repo with your stack files, not the application's.</p>
+    <ul class="ticks">
+      <li><b>Cluster conditions</b>: a node down, an unreachable manager, a lost raft quorum. These are always reports: no commit fixes a dead host.</li>
+      <li><b>Service conditions</b>: OOM kills, images that do not pull, tasks no node accepts, port conflicts, too few replicas, paused updates.</li>
+      <li><b>Causes linked</b>: services short of replicas because a node died are the node's problem.</li>
+      <li><b>Third-party safe</b>: when traefik is OOM-killed, the PR raises its limit in your stack file and leaves traefik alone.</li>
+    </ul>
+  </div>
+<pre><span class="c"># the global outlet</span>
+AITOMATON_INFRA_REPO=<span class="s">acme/infra</span>
+AITOMATON_INFRA_PATH=<span class="s">stacks/</span>
+AITOMATON_INFRA_POLICY=<span class="s">pr</span>
+
+<span class="c"># or per service, even on third-party images</span>
+<span class="k">deploy</span>:
+  <span class="k">labels</span>:
+    aitomaton.infra.repo: <span class="s">acme/edge-deploy</span>
+    aitomaton.infra.path: <span class="s">stacks/edge.yml</span>
+
+<span class="c"># → swarm:edge_traefik:oom</span>
+<span class="c">#   fix → aitomaton/fix-edge_traefik-oom</span>
+<span class="c">#   "memory limit 128 MiB → 384 MiB"</span></pre>
+</div></section>
+
 <section><div class="wrap two">
   <div>
     <h2>A space to fix it in</h2>
@@ -268,6 +296,7 @@ docker stack deploy -c stack.yml aitomaton</pre>
   <div class="docs">
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/architecture.md"><b>Architecture</b><span>loop, modules, data model</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/labels.md"><b>Service labels</b><span>descriptors, policies, credentials</span></a>
+    <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/infrastructure.md"><b>Infrastructure</b><span>swarm health, the outlet repo</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/analysis.md"><b>Analysis</b><span>bursts, trends, cascades</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/decisions.md"><b>Decisions</b><span>rules, laya, JEV, LLM</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/works.md"><b>Works</b><span>fix lifecycle, git, reports</span></a>

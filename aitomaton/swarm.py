@@ -19,6 +19,9 @@ Descriptor labels (service labels, or container labels as a fallback), with pref
   aitomaton.git.credential      NAME of the git credential: Docker secret aitomaton_git_<name> or env
                                 AITOMATON_GIT_TOKEN_<NAME> (never the token itself; see credentials.py)
   aitomaton.git.author          commit identity, "Name <email>"
+  aitomaton.infra.repo          where this service's deployment lives (stack files): infrastructure
+                                conditions (OOM kills, image pulls, replicas...) go there instead of the
+                                global infrastructure outlet. Also .ref, .path, .policy, .credential
 """
 from __future__ import annotations
 
@@ -29,6 +32,7 @@ import urllib.parse
 from datetime import datetime
 
 from .http import unix_get
+from .sources import swarm_health
 
 POLICIES = ("observe", "report", "pr", "push")
 
@@ -92,6 +96,10 @@ def descriptor(name, labels, prefix="aitomaton", default_policy="report"):
         "agent": g("agent"), "model": g("model"),
         "git_credential": g("git.credential"), "git_author": g("git.author"),
         "test": g("test"), "notes": g("notes"),
+        # the deployment's repo, independent of aitomaton.enable: third-party images cannot be fixed upstream,
+        # but their limits, tags and placement in your stack files can
+        "infra": {"repo": normalize_repo(g("infra.repo")), "ref": g("infra.ref"), "path": g("infra.path"),
+                  "policy": (g("infra.policy") or "").lower() or None, "credential": g("infra.credential")},
     }
 
 
@@ -101,6 +109,7 @@ class Swarm:
         self.services = {}      # name -> descriptor (+ runtime facts)
         self.error = None
         self.refreshed = 0
+        self.health = {"conditions": [], "advisories": [], "nodes": [], "managers": {}, "error": None}
         self._image_labels = {}  # image ref -> labels (org.opencontainers.image.source names the repo)
 
     def refresh(self):
@@ -111,6 +120,14 @@ class Swarm:
         except Exception as e:  # no socket, not a manager, ...
             self.error = str(e)
             return self.services
+        now = time.time()
+        if self.cfg.infra:
+            try:    # /nodes answers on managers only
+                nodes = unix_get(self.cfg.docker_socket, "/nodes") or []
+                self.health = dict(swarm_health.check(nodes, services, tasks, now, _ts, self.cfg.infra_grace,
+                                                      self.cfg.infra_task_failures), error=None)
+            except Exception as e:
+                self.health = dict(self.health, conditions=[], error=str(e))
         by_service = {}
         horizon = time.time() - 3600
         for t in tasks:
@@ -128,10 +145,12 @@ class Swarm:
             for k, v in self._labels_of(image).items():
                 labels.setdefault(k, v)
             d = descriptor(spec.get("Name", s.get("ID")), labels, self.cfg.label_prefix, self.cfg.default_policy)
+            running, desired = s.get("_replicas") or (None, None)
             d.update(id=s.get("ID"), image=image.split("@")[0], updated_at=_ts(s.get("UpdatedAt")),
+                     replicas={"running": running, "desired": desired} if desired is not None else None,
                      **by_service.get(s.get("ID"), {"failed_tasks_1h": 0, "last_task_error": None}))
             out[d["name"]] = d
-        self.services, self.error, self.refreshed = out, None, time.time()
+        self.services, self.error, self.refreshed = out, None, now
         return out
 
     def _labels_of(self, image):

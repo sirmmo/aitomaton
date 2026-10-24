@@ -32,6 +32,22 @@ the stack file. Per-service behaviour comes from [service labels](labels.md).
 | `AITOMATON_LABEL_PREFIX` | `aitomaton` | label namespace |
 | `SWARM_REFRESH_SECONDS` | `60` | how often services, labels and tasks are re-read |
 
+## Infrastructure
+
+See [infrastructure.md](infrastructure.md).
+
+| variable | default | meaning |
+|---|---|---|
+| `AITOMATON_INFRA` | `1` | watch the swarm itself: nodes, managers, replicas, task errors |
+| `AITOMATON_INFRA_NAME` | `swarm` | name of the infrastructure as an architecture |
+| `AITOMATON_INFRA_REPO` | none | the infrastructure outlet: the repo with the stack files. Without it, infrastructure reports stay on the page |
+| `AITOMATON_INFRA_REF` / `AITOMATON_INFRA_PATH` | `main` / none | its base branch, and where the stack files are |
+| `AITOMATON_INFRA_POLICY` | `report` | `observe`, `report`, `pr` or `push` for infrastructure issues |
+| `AITOMATON_INFRA_CREDENTIAL` | none | name of its git credential (as `aitomaton.git.credential`) |
+| `AITOMATON_INFRA_TEST` / `AITOMATON_INFRA_NOTES` | none | validation command and notes for the agent |
+| `INFRA_GRACE_SECONDS` | `300` | how long a service may run below its replicas before it is a condition |
+| `INFRA_TASK_FAILURES` | `3` | failed tasks of one kind per hour that make a condition |
+
 ## Analysis
 
 | variable | default | meaning |

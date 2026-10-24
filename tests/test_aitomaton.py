@@ -15,9 +15,10 @@ from aitomaton.analysis import analyze  # noqa: E402
 from aitomaton.config import Config  # noqa: E402
 from aitomaton.deciders import cap, rules  # noqa: E402
 from aitomaton.engine import Engine  # noqa: E402
-from aitomaton.executors import experiment_name, parse_result  # noqa: E402
+from aitomaton.executors import experiment_name, fix_branch, parse_result  # noqa: E402
 from aitomaton.server import make_handler  # noqa: E402
 from aitomaton.sources.prometheus import parse_alertmanager  # noqa: E402
+from aitomaton.sources import swarm_health  # noqa: E402
 from aitomaton.sources.sentry import parse_webhook, verify_signature  # noqa: E402
 from aitomaton.store import Store  # noqa: E402
 from aitomaton.swarm import Swarm, descriptor, normalize_repo  # noqa: E402
@@ -29,7 +30,9 @@ def cfg(**env):
     base = {"AITOMATON_DB": ":memory:", "AITOMATON_DECIDER": "rules", "LLM_BASE_URL": "https://openrouter.ai/api/v1",
             "LLM_API_KEY": "", "OPENROUTER_API_KEY": "", "SENTRY_URL": "", "PROMETHEUS_URL": "", "LAYA_URL": "",
             "STAIRWAY_URL": "", "STAIRWAY_TOKEN": "", "GITHUB_TOKEN": "", "AITOMATON_DISPATCH": "0",
-            "JEV_MODEL": "", "JEV_BASE_URL": "", "JEV_API_KEY": "", "AITOMATON_CHAIN": "", "AITOMATON_GIT_TOKEN": ""}
+            "JEV_MODEL": "", "JEV_BASE_URL": "", "JEV_API_KEY": "", "AITOMATON_CHAIN": "", "AITOMATON_GIT_TOKEN": "",
+            "AITOMATON_INFRA": "1", "AITOMATON_INFRA_REPO": "", "AITOMATON_INFRA_POLICY": "",
+            "AITOMATON_INFRA_CREDENTIAL": ""}
     base.update(env)
     old = {k: os.environ.get(k) for k in base}
     os.environ.update(base)
@@ -549,6 +552,147 @@ class PreparedFix(Served):
         self.assertEqual((path, auth), ("/repos/acme/api/pulls", "Bearer acme-token-123"))
         self.assertEqual((pr["head"], pr["base"], pr["title"]), ("aitomaton/fix-77", "main", "Guard missing price"))
         self.assertFalse(os.path.exists(os.path.join(folder, ".aitomaton")))
+
+
+def _iso(ts):
+    return time.strftime("%Y-%m-%dT%H:%M:%S.123456789Z", time.gmtime(ts))
+
+
+def node(nid, host, role="worker", state="ready", reach=None, engine="24.0.2"):
+    n = {"ID": nid, "Spec": {"Role": role, "Availability": "active"}, "Status": {"State": state, "Addr": "10.0.0.1"},
+         "Description": {"Hostname": host, "Engine": {"EngineVersion": engine},
+                         "Resources": {"NanoCPUs": 4e9, "MemoryBytes": 8 * 2 ** 30}}}
+    if role == "manager":
+        n["ManagerStatus"] = {"Reachability": reach or "reachable", "Leader": nid == "m1"}
+    return n
+
+
+def service(sid, name, replicas=1, updated=0, **spec):
+    return {"ID": sid, "UpdatedAt": _iso(updated), "Spec": dict({"Name": name, "Mode": {"Replicated": {
+        "Replicas": replicas}}, "TaskTemplate": {"ContainerSpec": {"Image": "traefik:3.1@sha256:x"},
+                                                 "Resources": {"Limits": {"MemoryBytes": 2 ** 28}}}}, **spec)}
+
+
+def task(tid, sid, state, node_id="w1", err=None, at=None):
+    return {"ID": tid, "ServiceID": sid, "NodeID": node_id, "DesiredState": "running" if state == "running" else "shutdown",
+            "Status": {"State": state, "Err": err, "Timestamp": _iso(at or time.time() - 60)}}
+
+
+def ts(v):
+    from aitomaton.swarm import _ts
+    return _ts(v)
+
+
+class SwarmHealth(unittest.TestCase):
+    def check(self, nodes, services, tasks):
+        return swarm_health.check(nodes, services, tasks, time.time(), ts)
+
+    def test_classify(self):
+        self.assertEqual(swarm_health.classify("task: non-zero exit (137): OOMKilled"), "oom")
+        self.assertEqual(swarm_health.classify("No such image: acme/api:1.5"), "image_pull")
+        self.assertEqual(swarm_health.classify("no suitable node (insufficient resources on 2 nodes)"), "unschedulable")
+        self.assertEqual(swarm_health.classify("Bind for 0.0.0.0:80 failed: port is already allocated"), "port_conflict")
+        self.assertEqual(swarm_health.classify("task: non-zero exit (1)"), "crash_loop")
+
+    def test_conditions(self):
+        nodes = [node("m1", "boss", "manager"), node("w1", "box", state="down", engine="28.0.1")]
+        services = [service("s1", "web_app", 3), service("s2", "edge_traefik"), service("s3", "big_job")]
+        tasks = [task("t1", "s1", "running", "m1"), task("t2", "s1", "shutdown", "w1")]
+        tasks += [task("o%d" % k, "s2", "failed", err="task: non-zero exit (137): OOMKilled") for k in range(3)]
+        tasks += [task("u%d" % k, "s3", "rejected", err="no suitable node (insufficient resources)") for k in range(4)]
+        h = self.check(nodes, services, tasks)
+        kinds = {c["key"]: c for c in h["conditions"]}
+        self.assertEqual(kinds["swarm:box:node_down"]["service"], None)
+        self.assertEqual(kinds["swarm:edge_traefik:oom"]["detail"]["failed_1h"], 3)
+        self.assertEqual(kinds["swarm:web_app:under_replicated"]["detail"]["cause"], "node box is down")
+        self.assertIn("swarm:big_job:unschedulable", kinds)
+        self.assertEqual(h["managers"], {"total": 1, "reachable": 1, "quorum": 1})
+        self.assertEqual({a["kind"] for a in h["advisories"]}, {"single_manager", "engine_skew"})
+
+    def test_quorum_lost_and_grace(self):
+        nodes = [node("m1", "a", "manager"), node("m2", "b", "manager", reach="unreachable"),
+                 node("m3", "c", "manager", reach="unreachable")]
+        h = self.check(nodes, [service("s1", "fresh", 2, updated=time.time() - 30)], [])
+        keys = {c["key"] for c in h["conditions"]}
+        self.assertIn("swarm:managers:quorum_lost", keys)
+        self.assertIn("swarm:b:manager_unreachable", keys)
+        self.assertNotIn("swarm:fresh:under_replicated", keys)      # still rolling out
+
+
+TRAEFIK = descriptor("edge_traefik", {"com.docker.stack.namespace": "edge"})       # third party, no repo
+OWNED = descriptor("shop_worker", {"com.docker.stack.namespace": "shop", "aitomaton.repo": "acme/worker",
+                                   "aitomaton.infra.repo": "acme/shop-deploy", "aitomaton.infra.path": "stack.yml",
+                                   "aitomaton.infra.policy": "pr"})
+
+
+class Infrastructure(Served):
+    def engine(self, **env):
+        c = cfg(AITOMATON_INFRA_REPO="https://github.com/acme/infra", AITOMATON_GIT_TOKEN="g" * 12, **env)
+        return Engine(c, Store(":memory:"), swarm_with(c, TRAEFIK, OWNED))
+
+    def health(self, e, *conds, now=None):
+        out = []
+        for kind, subject, service_ in conds:
+            out.append(swarm_health._cond(kind, subject, service_, swarm_health.LEVEL[kind], "%s %s" % (subject, kind),
+                                          None, {"service": service_}, failures=["t-%s-%d" % (subject, k)
+                                                                                for k in range(3)]
+                                          if kind == "oom" else None))
+        e.swarm.health = {"conditions": out, "advisories": [], "nodes": [], "managers": {}, "error": None}
+        e._ingest_health(now or time.time())
+
+    def test_third_party_oom_goes_to_the_infra_repo(self):
+        gh = self.serve(FakeGitHub)
+        FakeGitHub.calls[:] = []
+        e = self.engine(AITOMATON_DISPATCH="1", GITHUB_API=gh)
+        self.health(e, ("oom", "edge_traefik", "edge_traefik"), ("node_down", "box", None))
+        e.tick()
+        self.assertEqual(e.target(e.store.issue("swarm:edge_traefik:oom"))["repo"], "acme/infra")
+        paths = sorted(p for p, _, _ in FakeGitHub.calls)
+        self.assertEqual(paths, ["/repos/acme/infra/issues"] * 2)    # the OOM and the dead node, as reports
+        node_issue = e.store.issue("swarm:box:node_down")
+        self.assertEqual((node_issue["service"], node_issue["architecture"]), ("swarm", "swarm"))
+        st = e.status()["infrastructure"]
+        self.assertEqual(st["outlet"]["repo"], "acme/infra")
+        self.assertEqual(len(st["conditions"]), 2)
+
+        # still firing two hours later: decided again, but not reported twice
+        later = time.time() + 7200
+        self.health(e, ("oom", "edge_traefik", "edge_traefik"), ("node_down", "box", None), now=later)
+        e.tick(later)
+        self.assertEqual(len(FakeGitHub.calls), 2)
+        # it stops, then comes back: a new episode, a new report
+        self.health(e, ("node_down", "box", None), now=later + 60)
+        self.assertEqual(e.store.issue("swarm:edge_traefik:oom")["status"], "resolved")
+        back = later + 7200
+        self.health(e, ("oom", "edge_traefik", "edge_traefik"), ("node_down", "box", None), now=back)
+        e.tick(back)
+        self.assertEqual(len(FakeGitHub.calls), 3)
+
+    def test_service_infra_label_and_fix_brief(self):
+        e = self.engine(AITOMATON_GIT_TOKEN_ACME="a" * 12)
+        self.health(e, ("oom", "shop_worker", "shop_worker"))
+        issue = e.store.issue("swarm:shop_worker:oom")
+        t = e.target(issue)
+        self.assertEqual((t["repo"], t["path"], t["policy"], t["outlet"]), ("acme/shop-deploy", "stack.yml", "pr",
+                                                                            "service"))
+        e.tick()
+        w = e.store.works()[0]
+        self.assertEqual((w["kind"], w["status"], w["ref"]), ("fix", "dry-run", "aitomaton-infra-shop-worker-oom"))
+        self.assertIn("infrastructure repository", w["brief"])
+        self.assertIn("aitomaton/fix-shop_worker-oom", w["brief"])
+        self.assertIn("docker stack config", w["brief"])
+        self.assertEqual(e.status()["infrastructure"]["service_outlets"], ["acme/shop-deploy"])
+
+    def test_node_down_is_never_fixed(self):
+        e = self.engine(AITOMATON_INFRA_POLICY="push")
+        self.health(e, ("node_down", "box", None), ("quorum_lost", "managers", None))
+        e.tick()
+        self.assertEqual({d["applied"] for d in e.store.decisions()}, {"report"})
+
+    def test_off(self):
+        e = self.engine(AITOMATON_INFRA="0")
+        self.assertFalse(e.status()["infrastructure"]["enabled"])
+        self.assertEqual(fix_branch({"key": "sentry:api:77"}), "aitomaton/fix-77")
 
 
 class Helpers(unittest.TestCase):

@@ -7,12 +7,14 @@ import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-os.environ.update({"AITOMATON_DB": ":memory:", "AITOMATON_DECIDER": "rules", "AITOMATON_DISPATCH": "1",
+os.environ.update({"AITOMATON_INFRA_REPO": "acme/infra", "AITOMATON_INFRA_PATH": "stacks/",
+                   "AITOMATON_INFRA_POLICY": "pr", "AITOMATON_DB": ":memory:", "AITOMATON_DECIDER": "rules", "AITOMATON_DISPATCH": "1",
                    "STAIRWAY_URL": "", "LLM_API_KEY": "", "OPENROUTER_API_KEY": "", "SENTRY_URL": ""})
 
 from aitomaton.config import Config  # noqa: E402
 from aitomaton.engine import Engine  # noqa: E402
 from aitomaton.store import Store  # noqa: E402
+from aitomaton.sources import swarm_health  # noqa: E402
 from aitomaton.swarm import Swarm, descriptor  # noqa: E402
 
 random.seed(7)
@@ -35,7 +37,12 @@ services = [
     svc("billing_cron", "billing", repo="acme/billing", policy="observe", path="cron",
         **{"sentry.project": "billing-cron"}),
     svc("blog_ghost", "blog", repo="acme/blog-theme", policy="report"),
+    svc("edge_traefik", "edge"),       # third party: no repo, but its deployment lives in acme/infra
+    svc("search_opensearch", "search", **{"infra.repo": "acme/search-deploy", "infra.path": "stack.yml"}),
 ]
+for s_ in services:
+    s_["replicas"] = {"running": 1, "desired": 1}
+services[-1]["replicas"] = {"running": 1, "desired": 3}
 services[3].update(failed_tasks_1h=4, last_task_error="task: non-zero exit (137): OOMKilled")
 swarm = Swarm(cfg)
 swarm.services = {s["name"]: s for s in services}
@@ -115,12 +122,42 @@ engine.alertmanager_webhook({"alerts": [{"status": "firing", "labels": {
     "alertname": "ContainerMemoryNearLimit", "service": "shop_worker", "severity": "warning"},
     "annotations": {"summary": "shop_worker uses 96% of its memory limit"}}]})
 
+# the swarm itself: a worker died, the search cluster lost two replicas with it, traefik is OOM-killed
+health = {"conditions": [
+    swarm_health._cond("node_down", "worker-3", None, "error", "Node worker-3 (worker) is down", "10.0.0.13",
+                       {"node": "worker-3", "role": "worker", "state": "down", "message": "heartbeat failure"}),
+    swarm_health._cond("under_replicated", "search_opensearch", "search_opensearch", "warning",
+                       "search_opensearch runs 1 of 3 replicas", "node worker-3 is down",
+                       {"service": "search_opensearch", "running": 1, "desired": 3, "cause": "node worker-3 is down"}),
+    swarm_health._cond("oom", "edge_traefik", "edge_traefik", "error",
+                       "edge_traefik: 5 tasks failed in the last hour (oom)", "task: non-zero exit (137): OOMKilled",
+                       {"service": "edge_traefik", "failed_1h": 5, "error": "task: non-zero exit (137): OOMKilled",
+                        "image": "traefik:v3.1", "resources": {"Limits": {"MemoryBytes": 134217728}}},
+                       failures=["t%d" % k for k in range(5)]),
+], "advisories": [
+    {"kind": "even_managers", "target": "managers", "text": "2 managers tolerate no more losses than 1 would"},
+    {"kind": "engine_skew", "target": "nodes", "text": "Docker engines differ across nodes: manager-1 27.3.1, "
+                                                       "manager-2 27.3.1, worker-1 27.3.1, worker-2 26.1.4, worker-3 27.3.1"},
+], "managers": {"total": 2, "reachable": 2, "quorum": 2}, "error": None, "nodes": [
+    {"hostname": h, "role": r, "state": st, "availability": "active", "addr": "10.0.0.%d" % (10 + k),
+     "leader": k == 0, "reachability": "reachable" if r == "manager" else None, "engine": eng, "cpus": cpu,
+     "memory_gb": mem}
+    for k, (h, r, st, eng, cpu, mem) in enumerate([
+        ("manager-1", "manager", "ready", "27.3.1", 4.0, 15.6), ("manager-2", "manager", "ready", "27.3.1", 4.0, 15.6),
+        ("worker-1", "worker", "ready", "27.3.1", 16.0, 62.8), ("worker-2", "worker", "ready", "26.1.4", 16.0, 62.8),
+        ("worker-3", "worker", "down", "27.3.1", 16.0, 62.8)])]}
+swarm.health = health
+engine._ingest_health(now)
+
 engine.tick(now)
 
 # what the works look like once stairway and GitHub have answered (the demo has neither)
 for w in store.works():
     issue_ = store.issue(w["key"])
-    if w["kind"] == "fix" and issue_["service"] == "billing_api":
+    if w["kind"] == "fix" and issue_["source"] == "swarm":
+        store.update_work(w["id"], status="done", note="opened PR", result_url="https://github.com/acme/infra/pull/41",
+                          summary="Raised edge_traefik's memory limit from 128 MiB to 384 MiB in stacks/edge.yml.")
+    elif w["kind"] == "fix" and issue_["service"] == "billing_api":
         store.update_work(w["id"], status="running", note="folder created; cloning with env AITOMATON_GIT_TOKEN_ACME",
                           url="https://claude.ai/code/session_demo")
     elif w["kind"] == "fix":
@@ -128,12 +165,15 @@ for w in store.works():
                           result_url="https://github.com/%s/pull/128" % swarm.services[issue_["service"]]["repo"],
                           summary="Release pooled connections on cancellation; regression test added.")
     elif w["kind"] == "report":
-        store.update_work(w["id"], status="done", note="opened issue",
-                          result_url="https://github.com/acme/shop-db/issues/12")
+        repo = (engine.target(issue_) or {}).get("repo")
+        if repo:    # reports of services without a repo stay on the page
+            store.update_work(w["id"], status="done", note="opened issue",
+                              result_url="https://github.com/%s/issues/%d" % (repo, 10 + w["id"]))
 
 status = engine.status()
 status["demo"] = True
 for s in status["services"]:
     if s["enabled"]:
         s["git"] = "env AITOMATON_GIT_TOKEN_ACME"
+status["infrastructure"]["outlet"]["git"] = "env AITOMATON_GIT_TOKEN_ACME"
 json.dump(status, sys.stdout, indent=1, default=str)
