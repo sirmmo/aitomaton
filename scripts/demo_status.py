@@ -8,7 +8,8 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ.update({"AITOMATON_INFRA_REPO": "acme/infra", "AITOMATON_INFRA_PATH": "stacks/",
-                   "AITOMATON_INFRA_POLICY": "pr", "AITOMATON_DB": ":memory:", "AITOMATON_DECIDER": "rules", "AITOMATON_DISPATCH": "1",
+                   "AITOMATON_INFRA_POLICY": "pr", "AITOMATON_INFRA_POLICY_EMERGENCY": "pr+act",
+                   "AITOMATON_ACT": "1", "AITOMATON_NOTIFY_URL": "", "AITOMATON_DB": ":memory:", "AITOMATON_DECIDER": "rules", "AITOMATON_DISPATCH": "1",
                    "STAIRWAY_URL": "", "LLM_API_KEY": "", "OPENROUTER_API_KEY": "", "SENTRY_URL": ""})
 
 from aitomaton.config import Config  # noqa: E402
@@ -43,6 +44,7 @@ services = [
 for s_ in services:
     s_["replicas"] = {"running": 1, "desired": 1}
 services[-1]["replicas"] = {"running": 1, "desired": 3}
+services[-2].update(id="svc-traefik", replicas={"running": 1, "desired": 2})
 services[3].update(failed_tasks_1h=4, last_task_error="task: non-zero exit (137): OOMKilled")
 swarm = Swarm(cfg)
 swarm.services = {s["name"]: s for s in services}
@@ -147,6 +149,15 @@ health = {"conditions": [
         ("worker-1", "worker", "ready", "27.3.1", 16.0, 62.8), ("worker-2", "worker", "ready", "26.1.4", 16.0, 62.8),
         ("worker-3", "worker", "down", "27.3.1", 16.0, 62.8)])]}
 swarm.health = health
+engine._health_read = True      # aitomaton was already watching when this broke: an emergency
+
+
+class DemoActions:      # the demo has no swarm to act on
+    def run(self, step, sid):
+        return "raised edge_traefik's memory limit from 128 to 192 MiB"
+
+
+engine.actions = DemoActions()
 engine._ingest_health(now)
 
 engine.tick(now)
@@ -156,7 +167,7 @@ for w in store.works():
     issue_ = store.issue(w["key"])
     if w["kind"] == "fix" and issue_["source"] == "swarm":
         store.update_work(w["id"], status="done", note="opened PR", result_url="https://github.com/acme/infra/pull/41",
-                          summary="Raised edge_traefik's memory limit from 128 MiB to 384 MiB in stacks/edge.yml.")
+                          summary="Made the emergency raise permanent: edge_traefik memory limit 128 → 256 MiB in stacks/edge.yml.")
     elif w["kind"] == "fix" and issue_["service"] == "billing_api":
         store.update_work(w["id"], status="running", note="folder created; cloning with env AITOMATON_GIT_TOKEN_ACME",
                           url="https://claude.ai/code/session_demo")

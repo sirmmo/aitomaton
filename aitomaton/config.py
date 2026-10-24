@@ -70,6 +70,7 @@ class Config:
         self.infra_credential = _env("AITOMATON_INFRA_CREDENTIAL")
         self.infra_test = _env("AITOMATON_INFRA_TEST")
         self.infra_notes = _env("AITOMATON_INFRA_NOTES")
+        self.infra_policy_emergency = _env("AITOMATON_INFRA_POLICY_EMERGENCY")
         self.infra_grace = _int("INFRA_GRACE_SECONDS", 300)      # below its replicas this long: a condition
         self.infra_task_failures = _int("INFRA_TASK_FAILURES", 3)  # failed tasks of one kind per hour
 
@@ -98,6 +99,17 @@ class Config:
         self.jev_api_key = _env("JEV_API_KEY") or self.llm_api_key
         self.decision_cooldown = _int("DECISION_COOLDOWN_SECONDS", 3600)
         self.default_policy = _env("AITOMATON_DEFAULT_POLICY", "report")  # observe | report | pr | push
+
+        # emergencies (emergency.py): a second policy layer, direct actions, notifications
+        self.emergency_policy = _env("AITOMATON_EMERGENCY_POLICY")     # default layer for enabled services
+        self.emergency_window = _int("EMERGENCY_WINDOW_SECONDS", 21600)  # older episodes are not emergencies
+        self.rollback_window = _int("ROLLBACK_WINDOW_SECONDS", 3600)     # trouble this soon after a deploy: roll back
+        self.act = _bool("AITOMATON_ACT", False)                 # master switch for direct actions on the swarm
+        self.act_verify = _int("ACT_VERIFY_SECONDS", 300)        # wait this long before the next runbook step
+        self.max_actions_per_hour = _int("MAX_ACTIONS_PER_HOUR", 3)
+        self.act_memory_factor = _float("ACT_MEMORY_FACTOR", 1.5)
+        self.act_memory_max_mb = _int("ACT_MEMORY_MAX_MB", 8192)
+        self.notify_url = _env("AITOMATON_NOTIFY_URL")           # Slack-compatible incoming webhook
 
         # execution
         self.dispatch = _bool("AITOMATON_DISPATCH", False)       # off: works are prepared (dry-run), not sent
@@ -134,6 +146,9 @@ class Config:
             },
             "infrastructure": {"enabled": self.infra, "name": self.infra_name, "repo": self.infra_repo,
                                "policy": self.infra_policy},
+            "emergency": {"default_policy": self.emergency_policy, "infra_policy": self.infra_policy_emergency,
+                          "act": self.act, "notify": bool(self.notify_url), "window_s": self.emergency_window,
+                          "max_actions_per_hour": self.max_actions_per_hour},
             "laya": bool(self.laya_url),
             "chain": ["rules"] + self.chain,
             "jev": {"model": self.jev_model, "configured": bool(self.jev_model and (

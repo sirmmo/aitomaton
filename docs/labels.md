@@ -27,6 +27,8 @@ services:
 | `aitomaton.ref` | `holodocker.repo_ref`, else `main` | base branch for fixes |
 | `aitomaton.path` | `holodocker.repo_path` | subdirectory, for monorepos |
 | `aitomaton.policy` | `AITOMATON_DEFAULT_POLICY` | `observe`, `report`, `pr` or `push`: the most aitomaton may do |
+| `aitomaton.policy.emergency` | `AITOMATON_EMERGENCY_POLICY`, else `aitomaton.policy` | the layer in force during an [emergency](emergencies.md), e.g. `push` or `pr+act` |
+| `aitomaton.act` | — | `false`: never run direct actions on this service, whatever a policy says |
 | `aitomaton.sentry.project` | the service's name, with or without the stack prefix | Sentry/urgentry project slugs, comma separated |
 | `aitomaton.architecture` | the stack namespace | group for architecture-wide analysis. Several stacks can share one |
 | `aitomaton.depends` | none | services this one needs (full or short names), used to find the root of a cascade |
@@ -38,7 +40,7 @@ services:
 | `aitomaton.git.credential` | none | **name** of the git credential (below) |
 | `aitomaton.git.author` | `AITOMATON_GIT_AUTHOR` | commit identity, `Name <email>` |
 | `aitomaton.infra.repo` | the global outlet (`AITOMATON_INFRA_REPO`) | where this service's **deployment** lives. Infrastructure issues (OOM kills, image pulls, replicas) go here. It works without `aitomaton.enable`, even on third-party images |
-| `aitomaton.infra.path` / `.ref` / `.policy` / `.credential` | the outlet's | stack file, branch, policy and credential name for those issues |
+| `aitomaton.infra.path` / `.ref` / `.policy` / `.policy.emergency` / `.credential` | the outlet's | stack file, branch, policy and credential name for those issues |
 
 ### Policies
 

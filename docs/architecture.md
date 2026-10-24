@@ -28,6 +28,7 @@ A webhook writes to the store and wakes the loop. Each tick runs every step in o
 | `sources/sentry.py` | webhook parsing (integration platform, legacy plugin), HMAC check, event summary, API poller |
 | `sources/swarm_health.py` | the swarm itself: nodes, quorum, replicas, classified task errors → conditions and advisories |
 | `sources/prometheus.py` | Alertmanager parsing, PromQL context queries |
+| `emergency.py` | layered policies, emergency detection, the runbook of direct actions (Docker API writes) |
 | `analysis.py` | bursts, long-term trends, cascades; produces per-issue features and findings |
 | `deciders.py` | the prose state, rules, laya, JEV/LLM tiers, the chain, guard rails, policy cap |
 | `executors.py` | the brief, report bodies, result parsing, stairway MCP client, GitHub client |

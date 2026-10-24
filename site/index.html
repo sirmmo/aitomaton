@@ -90,7 +90,7 @@ footer{padding:36px 0 56px;border-top:1px solid var(--line);color:var(--muted);f
 <nav>
   <a class="logo" href="#">ai<span>to</span>maton</a>
   <div class="links">
-    <a class="hide" href="#how">How</a><a class="hide" href="#decide">Decisions</a><a class="hide" href="#labels">Labels</a><a class="hide" href="#infra">Infrastructure</a>
+    <a class="hide" href="#how">How</a><a class="hide" href="#decide">Decisions</a><a class="hide" href="#labels">Labels</a><a class="hide" href="#infra">Infrastructure</a><a class="hide" href="#emergency">Emergencies</a>
     <a href="demo/">Demo</a><a href="https://github.com/sirmmo/aitomaton">GitHub</a>
   </div>
 </nav>
@@ -216,6 +216,30 @@ AITOMATON_INFRA_POLICY=<span class="s">pr</span>
 <span class="c">#   "memory limit 128 MiB → 384 MiB"</span></pre>
 </div></section>
 
+<section id="emergency"><div class="wrap two">
+  <div>
+    <h2>When a PR is not enough</h2>
+    <p class="sub">Policies have two layers. While production is down, the emergency layer applies: it can push
+      instead of opening a PR, notify, and act on the swarm directly.</p>
+    <ul class="ticks">
+      <li><b>Emergencies by rules</b>: a lost quorum, a service at 0 replicas, OOM kills that leave it short, an error burst right after a deploy.</li>
+      <li><b>A fixed runbook</b>: restart, roll back, raise the memory limit. aitomaton runs it through the Docker API, one step at a time, each step checked before the next. No model gets write access to the swarm.</li>
+      <li><b>Bounded</b>: off unless <code>AITOMATON_ACT=1</code>, per-service veto, at most a few actions an hour, never on outages older than aitomaton itself.</li>
+      <li><b>Then made permanent</b>: the direct action buys time; the PR to the stack file is the fix.</li>
+    </ul>
+  </div>
+<pre><span class="k">deploy</span>:
+  <span class="k">labels</span>:
+    aitomaton.policy: <span class="s">pr</span>
+    aitomaton.policy.emergency: <span class="s">push+act</span>
+
+<span class="c"># 03:12 shop_api 0/3 replicas, deployed 03:04</span>
+<span class="c">#   EMERGENCY → notify</span>
+<span class="c">#   rollback        done   (03:13)</span>
+<span class="c">#   restart         —      recovered at 03:15</span>
+<span class="c">#   fix → push      when the tests pass</span></pre>
+</div></section>
+
 <section><div class="wrap two">
   <div>
     <h2>A space to fix it in</h2>
@@ -297,6 +321,7 @@ docker stack deploy -c stack.yml aitomaton</pre>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/architecture.md"><b>Architecture</b><span>loop, modules, data model</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/labels.md"><b>Service labels</b><span>descriptors, policies, credentials</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/infrastructure.md"><b>Infrastructure</b><span>swarm health, the outlet repo</span></a>
+    <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/emergencies.md"><b>Emergencies</b><span>layered policies, runbook, notifications</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/analysis.md"><b>Analysis</b><span>bursts, trends, cascades</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/decisions.md"><b>Decisions</b><span>rules, laya, JEV, LLM</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/works.md"><b>Works</b><span>fix lifecycle, git, reports</span></a>

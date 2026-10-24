@@ -105,6 +105,12 @@ gets this brief:
 The branch is `aitomaton/fix-<service>-<condition>`, and aitomaton opens the PR. **Deploying the merged change
 is up to you** (or to holodocker).
 
+## Emergencies
+
+Infrastructure conditions are where most emergencies come from. Examples: a lost quorum, a service at 0
+replicas, OOM kills that leave it short. The outlet's emergency layer (`AITOMATON_INFRA_POLICY_EMERGENCY`,
+e.g. `pr+act`) can add direct actions to the PR. See [emergencies.md](emergencies.md).
+
 ## Reports, once per episode
 
 This applies to every issue, not only infrastructure ones. A report is opened once per episode. When an issue

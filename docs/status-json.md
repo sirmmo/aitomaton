@@ -67,6 +67,8 @@ UTC.
     "git": "env AITOMATON_GIT_TOKEN_ACME",       // where the credential comes from, never the value
     "infra_repo": null                           // aitomaton.infra.repo, when set
   }],
+  "emergencies": [{"issue": "…", "reason": "…", "policy": "pr+act (emergency)", "runbook": ["raise_memory"],
+                   "actions": [{"step": "raise_memory", "status": "done", "note": "…"}]}],   // emergencies.md
   "infrastructure": {                            // see infrastructure.md
     "enabled": true, "error": null, "name": "swarm",
     "outlet": {"repo": "acme/infra", "ref": "main", "path": "stacks/", "policy": "report", "git": "env …"},

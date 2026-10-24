@@ -1,5 +1,8 @@
 # Decisions
 
+The action is then capped by the policy layer in force: the normal one, or the emergency one while an
+[emergency](emergencies.md) lasts.
+
 For every issue with new activity, aitomaton decides one **action**:
 
 | action | meaning |

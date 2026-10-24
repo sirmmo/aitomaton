@@ -9,6 +9,8 @@ Descriptor labels (service labels, or container labels as a fallback), with pref
   aitomaton.ref                 branch to base fixes on (holodocker.repo_ref, default: main)
   aitomaton.path                subdirectory in a monorepo (holodocker.repo_path)
   aitomaton.policy              observe | report | pr | push   (the most aitomaton may do)
+  aitomaton.policy.emergency    the layer in force during an emergency, e.g. push+act (see emergency.py)
+  aitomaton.act                 false: never run direct actions on this service, whatever the policies say
   aitomaton.sentry.project      Sentry/urgentry project slug(s) for this service, comma separated
   aitomaton.architecture        group name for architecture-wide analysis (default: the stack namespace)
   aitomaton.depends             services this one depends on, comma separated (helps find cascade roots)
@@ -89,6 +91,8 @@ def descriptor(name, labels, prefix="aitomaton", default_policy="report"):
         "repo": repo, "repo_raw": raw_repo, "repo_hint": normalize_repo(hint), "ref": g("ref", "holodocker.repo_ref") or "main",
         "path": g("path", "holodocker.repo_path") or "",
         "policy": policy if enabled else "observe",
+        "policy_emergency": g("policy.emergency") if enabled else None,
+        "act": False if str(g("act") or "").lower() in ("0", "false", "no", "off") else None,
         "sentry_projects": projects,
         "architecture": g("architecture") or stack or name,
         "depends": [d.strip() for d in (g("depends") or "").split(",") if d.strip()],
@@ -99,7 +103,8 @@ def descriptor(name, labels, prefix="aitomaton", default_policy="report"):
         # the deployment's repo, independent of aitomaton.enable: third-party images cannot be fixed upstream,
         # but their limits, tags and placement in your stack files can
         "infra": {"repo": normalize_repo(g("infra.repo")), "ref": g("infra.ref"), "path": g("infra.path"),
-                  "policy": (g("infra.policy") or "").lower() or None, "credential": g("infra.credential")},
+                  "policy": (g("infra.policy") or "").lower() or None, "credential": g("infra.credential"),
+                  "policy_emergency": g("infra.policy.emergency")},
     }
 
 

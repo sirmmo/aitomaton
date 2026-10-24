@@ -21,6 +21,10 @@ services:
       # published on the host, so stairway (on the host) can call back on http://localhost:8790
       - "8790:8790"
     volumes:
+      # ":ro" protects the socket file, not the API: whoever can reach the socket can change the swarm.
+      # aitomaton only writes with AITOMATON_ACT=1 (emergency runbook). For least privilege, put a socket
+      # proxy in front (e.g. tecnativa/docker-socket-proxy with SERVICES=1 NODES=1 TASKS=1, plus POST=1
+      # only if direct actions are on) and set DOCKER_SOCKET=tcp://socket-proxy:2375.
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - state:/state
       - /srv:/srv
@@ -34,6 +38,7 @@ services:
         constraints: [node.role == manager]
       labels:
         aitomaton.enable: "false"        # do not try to fix yourself
+        aitomaton.act: "false"           # ... or restart yourself in an emergency
         # traefik.enable: "true"
         # traefik.http.routers.aitomaton.rule: Host(`aitomaton.example.org`)
         # traefik.http.services.aitomaton.loadbalancer.server.port: "8790"
@@ -47,6 +52,7 @@ services:
       replicas: 1
       labels:
         aitomaton.enable: "false"
+        aitomaton.act: "false"
 
 networks:
   aitomaton:

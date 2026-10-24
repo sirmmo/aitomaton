@@ -28,7 +28,7 @@ the stack file. Per-service behaviour comes from [service labels](labels.md).
 | `PROMETHEUS_DEFAULT_SELECTOR` | `{container_label_com_docker_swarm_service_name="{service}"}` | selector when a service has no `aitomaton.prometheus.selector` (cAdvisor labels) |
 | `PROMETHEUS_QUERIES` | memory, memory/limit, CPU | JSON `{name: promql}`; `{selector}` is replaced per service. `memory_limit_ratio` feeds the rules |
 | `ALERTMANAGER_HOOK_SECRET` | none | required `?token=` on `/hooks/alertmanager` |
-| `DOCKER_SOCKET` | `/var/run/docker.sock` | a manager's socket (read only is enough) |
+| `DOCKER_SOCKET` | `/var/run/docker.sock` | a manager's socket, or `tcp://host:port` for a socket proxy. Reads only, unless `AITOMATON_ACT=1` |
 | `AITOMATON_LABEL_PREFIX` | `aitomaton` | label namespace |
 | `SWARM_REFRESH_SECONDS` | `60` | how often services, labels and tasks are re-read |
 
@@ -43,10 +43,27 @@ See [infrastructure.md](infrastructure.md).
 | `AITOMATON_INFRA_REPO` | none | the infrastructure outlet: the repo with the stack files. Without it, infrastructure reports stay on the page |
 | `AITOMATON_INFRA_REF` / `AITOMATON_INFRA_PATH` | `main` / none | its base branch, and where the stack files are |
 | `AITOMATON_INFRA_POLICY` | `report` | `observe`, `report`, `pr` or `push` for infrastructure issues |
+| `AITOMATON_INFRA_POLICY_EMERGENCY` | the above | its emergency layer, e.g. `pr+act` ([emergencies.md](emergencies.md)) |
 | `AITOMATON_INFRA_CREDENTIAL` | none | name of its git credential (as `aitomaton.git.credential`) |
 | `AITOMATON_INFRA_TEST` / `AITOMATON_INFRA_NOTES` | none | validation command and notes for the agent |
 | `INFRA_GRACE_SECONDS` | `300` | how long a service may run below its replicas before it is a condition |
 | `INFRA_TASK_FAILURES` | `3` | failed tasks of one kind per hour that make a condition |
+
+## Emergencies
+
+See [emergencies.md](emergencies.md).
+
+| variable | default | meaning |
+|---|---|---|
+| `AITOMATON_EMERGENCY_POLICY` | the normal layer | emergency layer of enabled services without `aitomaton.policy.emergency`, e.g. `push` or `pr+act` |
+| `AITOMATON_INFRA_POLICY_EMERGENCY` | the outlet's normal layer | the infrastructure outlet's emergency layer |
+| `EMERGENCY_WINDOW_SECONDS` | `21600` | only episodes that began this recently are emergencies |
+| `ROLLBACK_WINDOW_SECONDS` | `3600` | trouble this soon after a deploy puts `rollback` first |
+| `AITOMATON_ACT` | `0` | master switch for direct actions. Off: they are recorded as dry-runs |
+| `ACT_VERIFY_SECONDS` | `300` | time a step gets to work before the next one |
+| `MAX_ACTIONS_PER_HOUR` | `3` | direct actions on the whole swarm |
+| `ACT_MEMORY_FACTOR` / `ACT_MEMORY_MAX_MB` | `1.5` / `8192` | how `raise_memory` raises a limit, and its ceiling |
+| `AITOMATON_NOTIFY_URL` | none | Slack-compatible incoming webhook (Slack, Mattermost, Rocket.Chat, Discord's `/slack`) |
 
 ## Analysis
 

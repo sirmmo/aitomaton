@@ -42,6 +42,8 @@ tr:last-child td{border-bottom:0}td.num{text-align:right;font-variant-numeric:ta
 .tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}.tag{font-size:11px;background:var(--chip);border-radius:4px;padding:0 6px}
 .trail{margin:6px 0 0;padding-left:16px;font-size:12px;color:var(--muted)}
 #err{color:var(--bad)}
+.emergency{border:1px solid var(--bad);border-left-width:4px}
+.steps{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center}.steps .arrow{color:var(--muted)}
 .demo{margin-top:12px;padding:8px 12px;border-radius:8px;background:var(--chip);font-size:13px}
 </style>
 </head>
@@ -56,6 +58,7 @@ tr:last-child td{border-bottom:0}td.num{text-align:right;font-variant-numeric:ta
 <div id="err"></div>
 <div class="stats" id="stats"></div>
 
+<div id="em-wrap" hidden><h2 style="color:var(--bad)">Emergencies <span class="n" id="n-em">0</span></h2><div id="emergencies"></div></div>
 <h2>Works <span class="n" id="n-works">0</span></h2><div id="works"></div>
 <h2>Infrastructure <span class="n" id="n-infra">0</span></h2><div id="infra"></div>
 <h2>Active findings <span class="n" id="n-findings">0</span></h2><div id="findings"></div>
@@ -99,13 +102,26 @@ function render(d) {
     chip("llm · " + c.llm.model, c.llm.configured),
     chip("stairway · " + c.executor.agent, c.executor.stairway), chip("pre-clone with service credentials", c.executor.prepares_clone),
     chip("default policy: " + c.default_policy, true),
+    chip("direct actions " + (c.emergency && c.emergency.act ? "on" : "off"), c.emergency && c.emergency.act),
+    chip("notify", c.emergency && c.emergency.notify),
     chip("infrastructure" + (c.infrastructure && c.infrastructure.repo ? " → " + c.infrastructure.repo : ""), c.infrastructure && c.infrastructure.enabled, d.infrastructure && d.infrastructure.error),
   ].join("");
   const w = d.summary.works;
   $("stats").innerHTML = [
-    ["in progress", d.summary.in_progress], ["fixed (PR / push)", w.done], ["prepared (dry-run)", w["dry-run"]],
+    ["emergencies", d.summary.emergencies || 0], ["in progress", d.summary.in_progress], ["fixed (PR / push)", w.done], ["prepared (dry-run)", w["dry-run"]],
     ["active findings", d.summary.active_findings], ["decisions 24h", d.summary.decisions_24h], ["issues", d.summary.issues],
   ].map(([k, v]) => `<div class="stat"><b>${esc(v ?? 0)}</b><span>${esc(k)}</span></div>`).join("");
+
+  // emergencies: what is down right now, the policy layer in force, the runbook so far
+  const ems = d.emergencies || [];
+  $("em-wrap").hidden = !ems.length; $("n-em").textContent = ems.length;
+  $("emergencies").innerHTML = ems.map(e => {
+    const done = Object.fromEntries((e.actions || []).map(a => [a.step, a]));
+    const steps = (e.runbook || []).map(st => { const a = done[st];
+      return badge(st + (a ? " · " + a.status : ""), a ? "s-" + a.status : "s-dry-run") + (a && a.note ? ` <span class="muted" style="font-size:12px">${esc(a.note)}</span>` : ""); });
+    return `<div class="card emergency"><div class="top">${badge("emergency", "s-failed")} <strong>${esc(e.reason)}</strong></div>
+      <div class="muted mono">${esc(e.issue)} · ${esc(e.service || "")} · since ${ago(e.since)} · policy ${esc(e.policy)}</div>
+      <div class="steps">${steps.length ? `<span class="muted">runbook</span> ` + steps.join('<span class="arrow">→</span>') : '<span class="muted">no runbook step applies: a human has to act</span>'}</div></div>`; }).join("");
 
   const issueTitle = Object.fromEntries(d.issues.map(i => [i.key, i]));
   // works
@@ -118,7 +134,7 @@ function render(d) {
       <div class="tags">${x.url ? `<span class="tag">${link(x.url, "session")}</span>` : ""}${x.result_url ? `<span class="tag">${link(x.result_url, "result")}</span>` : ""}</div>
       ${x.summary ? `<p>${esc(x.summary)}</p>` : ""}
       <details><summary>log</summary><pre>${esc(x.log.map(e => `${e.at}  ${e.status}${e.note ? "  " + e.note : ""}`).join("\n"))}</pre></details>
-      ${x.brief ? `<details><summary>${x.kind === "fix" ? "brief sent to the agent" : "report"}</summary><pre>${esc(x.brief)}</pre></details>` : ""}
+      ${x.brief ? `<details><summary>${x.kind === "fix" ? "brief sent to the agent" : x.kind === "report" ? "report" : "details"}</summary><pre>${esc(x.brief)}</pre></details>` : ""}
     </div>`; }).join("") : empty("No works yet. Fixes and reports appear here once a decision calls for them.");
 
   // findings
@@ -181,6 +197,7 @@ function render(d) {
     if (a.new) f.push("new"); if (a.regression) f.push("regression"); if (a.burst && a.burst.burst) f.push("burst ×" + a.burst.ratio);
     if (a.long_term && a.long_term.rising) f.push("rising"); else if (a.long_term && a.long_term.chronic) f.push("chronic");
     if (a.cascade) f.push(a.cascade_root ? "cascade root" : "cascade");
+    if (i.emergency) f.push("emergency");
     if (i.decision) f.push("→ " + i.decision.applied);
     return `<tr><td>${badge(i.level || "?", "l-" + (i.level || ""))}</td>
       <td class="title">${i.url ? link(i.url, i.title) : esc(i.title)}<div class="muted mono">${esc(i.culprit || "")}</div></td>

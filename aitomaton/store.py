@@ -208,8 +208,8 @@ class Store:
         return r[0] if r else None
 
     def open_work(self, key):
-        r = self.q("SELECT * FROM works WHERE key=? AND status IN (%s) ORDER BY id DESC LIMIT 1"
-                   % ",".join("?" * len(OPEN_WORK)), (key,) + OPEN_WORK)
+        r = self.q("SELECT * FROM works WHERE key=? AND kind IN ('fix','report') AND status IN (%s) "
+                   "ORDER BY id DESC LIMIT 1" % ",".join("?" * len(OPEN_WORK)), (key,) + OPEN_WORK)
         return r[0] if r else None
 
     def last_work(self, key, kind, statuses):
@@ -222,6 +222,10 @@ class Store:
             return self.q("SELECT * FROM works WHERE status IN (%s) ORDER BY id DESC LIMIT ?"
                           % ",".join("?" * len(statuses)), tuple(statuses) + (limit,))
         return self.q("SELECT * FROM works ORDER BY id DESC LIMIT ?", (limit,))
+
+    def running_fixes(self):
+        return self.q("SELECT COUNT(*) n FROM works WHERE kind='fix' AND status IN ('dispatched','running','waiting')"
+                      )[0]["n"]
 
     def works_since(self, since, kind=None):
         """Works actually sent (dry-runs and queued ones do not count against the daily limit)."""

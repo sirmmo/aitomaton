@@ -1,6 +1,7 @@
 """The loop: ingest -> analyse -> decide -> act -> follow up, and the status JSON."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -8,10 +9,10 @@ import time
 from datetime import datetime, timezone
 
 from . import __version__
-from . import credentials, workspace
+from . import credentials, emergency, workspace
 from .analysis import analyze
-from .deciders import Decider, cap
-from .executors import GitHub, Stairway, brief, experiment_name, fix_branch, parse_result, report_body
+from .deciders import ORDER, Decider, cap
+from .executors import GitHub, Stairway, brief, experiment_name, fix_branch, notify, parse_result, report_body
 from .sources.prometheus import Prometheus, parse_alertmanager
 from .sources.sentry import SentryClient, issue_key, parse_webhook, summarize_event
 from .store import OPEN_WORK, Store
@@ -34,6 +35,9 @@ class Engine:
         self.decider = Decider(cfg)
         self.stairway = Stairway(cfg)
         self.github = GitHub(cfg)
+        self.actions = emergency.SwarmActions(cfg)
+        self.emergencies = {}       # issue key -> {"reason", "runbook", "since"}, recomputed every tick
+        self._health_read = False   # the first read after start is the baseline: what is already broken
         self.analysis = {"issues": {}, "services": {}, "cascades": {}, "findings": []}
         self.last_tick = 0
         self.tick_error = None
@@ -155,10 +159,19 @@ class Engine:
             "ref": own.get("ref") or (c.infra_ref if not mine else "main"),
             "path": own.get("path") or ("" if mine else c.infra_path),
             "policy": policy if policy in POLICIES else "observe",
+            "policy_emergency": own.get("policy_emergency") or c.infra_policy_emergency,
             "git_credential": own.get("credential") or (None if mine else c.infra_credential), "git_author": None,
             "test": c.infra_test, "notes": c.infra_notes, "agent": None, "model": None,
             "prometheus_selector": (service or {}).get("prometheus_selector"),
         }
+
+    def layer(self, issue, target=None):
+        """The policy layer in force for an issue: the emergency layer while it is an emergency."""
+        target = target if target is not None else self.target(issue)
+        app = self.swarm.get(issue["service"])
+        default = None if (target or {}).get("kind") == "infra" or not (target or {}).get("enabled") \
+            else self.cfg.emergency_policy
+        return emergency.layer(target, app, self.emergencies.get(issue["key"]), default)
 
     def credential(self, service):
         return credentials.resolve(service, environ=self.cfg.environ, secrets_dir=self.cfg.secrets_dir)
@@ -197,7 +210,10 @@ class Engine:
                 self.sentry.poll(self.store, lambda p, i: self._ingest("sentry", p, i))
             self.analysis = analyze(self.store, self.swarm, self.cfg, now)
             self.store.set_findings(self.analysis["findings"], now)
+            self.emergencies = self._detect(now)
             self._decide_all(now)
+            self._handle_emergencies(now)
+            self._close_emergencies()
             self._follow_works()
             self.store.prune(now - (self.cfg.long_days + 1) * 86400)
             self.last_tick, self.tick_error = now, None
@@ -208,12 +224,16 @@ class Engine:
         h = self.swarm.health
         if h.get("error"):
             return      # an unreadable swarm says nothing about which conditions ended
-        firing = set()
+        firing, baseline = set(), not self._health_read
+        self._health_read = True
         for c in h["conditions"]:
             firing.add(c["key"])
             cur = self.store.issue(c["key"])
             back = not cur or cur["status"] == "resolved"
-            flags = {"regression": bool(cur), "fired_at": now} if back else {}
+            # broken before aitomaton looked: reported, but not an emergency (it did not happen on our watch)
+            pre = baseline and not cur
+            start = min(c.get("since") or now, now) if pre else now
+            flags = {"regression": bool(cur), "fired_at": start, "preexisting": pre} if back else {}
             seen = list((cur["flags"] or {}).get("tasks") or []) if cur else []
             fresh = [t for t in c["failures"] if t not in seen]
             n = len(fresh) if c["failures"] else 1
@@ -225,10 +245,10 @@ class Engine:
                 service=svc["name"] if svc else c["service"] or self.cfg.infra_name,
                 architecture=svc["architecture"] if svc else self.cfg.infra_name,
                 title=c["title"], culprit=c["culprit"], level=c["level"], status="unresolved",
-                first_seen=now, last_seen=now, total=((cur or {}).get("total") or 0) + n, users=0,
+                first_seen=start if back else now, last_seen=now, total=((cur or {}).get("total") or 0) + n, users=0,
                 detail=c["detail"], flags=flags)
             if back and cur:
-                self.store.x("UPDATE issues SET first_seen=? WHERE key=?", (now, c["key"]))
+                self.store.x("UPDATE issues SET first_seen=? WHERE key=?", (start, c["key"]))
             self.store.add_occurrence(c["key"], now, n)
         for i in self.store.q("SELECT key, flags FROM issues WHERE source='swarm' AND status!='resolved'"):
             if i["key"] not in firing:
@@ -253,7 +273,8 @@ class Engine:
         if (issue["last_seen"] or 0) <= last["at"]:
             return False
         lf = last["features"] or {}
-        escalated = (f["burst"]["burst"] and not (lf.get("burst") or {}).get("burst")) or \
+        escalated = (issue["key"] in self.emergencies and not lf.get("emergency")) or \
+                    (f["burst"]["burst"] and not (lf.get("burst") or {}).get("burst")) or \
                     (f["regression"] and not lf.get("regression")) or \
                     (f.get("cascade_root") and not lf.get("cascade_root"))
         return escalated or now - last["at"] >= self.cfg.decision_cooldown
@@ -277,16 +298,100 @@ class Engine:
                     log.warning("latest event for %s: %s", key, e)
             prom = self.prom.context(app) if app else {}
             d = self.decider.decide(issue, f, service, prom)
-            policy = service["policy"] if service else "observe"
-            applied = cap(d["action"], policy)
-            features = dict(f, metrics=prom)
-            did = self.store.add_decision(key, d["action"], applied, policy, d["decider"], d["confidence"],
+            lay = self.layer(issue, service)
+            applied = cap(d["action"], lay["deliver"])
+            em = self.emergencies.get(key)
+            if em and ORDER.index(applied) < ORDER.index("report"):
+                applied = "report"      # an emergency always reaches a human
+            if service and lay["deliver"] != service.get("policy"):
+                service = dict(service, policy=lay["deliver"])     # e.g. push instead of pr while it lasts
+            features = dict(f, metrics=prom, emergency=em["reason"] if em else None)
+            did = self.store.add_decision(key, d["action"], applied, lay["label"], d["decider"], d["confidence"],
                                           d["rationale"], dict(features, trail=d["trail"]))
-            log.info("decision %s: %s -> %s (%s, policy %s)", key, d["action"], applied, d["decider"], policy)
+            log.info("decision %s: %s -> %s (%s, policy %s)", key, d["action"], applied, d["decider"], lay["label"])
             if applied == "fix":
                 self._start_fix(issue, f, d, service, prom, did, now)
             elif applied == "report":
                 self._report(issue, f, d, service, prom, did)
+
+    # ------------------------------------------------------------ emergencies
+    def _detect(self, now):
+        out = {}
+        for key, f in self.analysis["issues"].items():
+            issue = self.store.issue(key)
+            if issue and issue["status"] != "resolved":
+                e = emergency.detect(issue, f, self.swarm.get(issue["service"]), now, self.cfg)
+                if e:
+                    out[key] = e
+        return out
+
+    def _notify(self, text):
+        if not self.cfg.dispatch:
+            return "not sent: dispatch is off"
+        if not self.cfg.notify_url:
+            return None
+        try:
+            notify(self.cfg, text)
+            return "notified"
+        except Exception as e:
+            return "notification failed: %s" % e
+
+    def _handle_emergencies(self, now):
+        """Declare each emergency once per episode, run the next runbook step when the layer allows it,
+        and close the emergency when it is over."""
+        for key, e in self.emergencies.items():
+            issue = self.store.issue(key)
+            app = self.swarm.get(issue["service"])
+            lay = self.layer(issue)
+            episode = [w for w in self.store.q("SELECT * FROM works WHERE key=? AND kind IN ('emergency','act') "
+                                               "AND created>=? ORDER BY id", (key, e["since"] - 1))]
+            declared = next((w for w in episode if w["kind"] == "emergency"), None)
+            if not declared:
+                text = "EMERGENCY %s: %s\npolicy %s; runbook: %s\n%s" % (
+                    issue["service"], e["reason"], lay["label"], ", ".join(e["runbook"]) or "none: needs a human",
+                    "%s/#%s" % (self.cfg.public_url, key))
+                wid = self.store.add_work(key, None, "emergency", "running", "swarm", text)
+                self.store.update_work(wid, note=self._notify(text) or "declared", ref=e["reason"][:120])
+                declared = self.store.work(wid)
+            acts = [w for w in episode if w["kind"] == "act"]
+            if not (lay["act"] and app and app.get("id") and e["runbook"]):
+                continue
+            if acts and now - acts[-1]["created"] < self.cfg.act_verify:
+                continue        # give the last step time to work
+            step = next((s for s in e["runbook"] if s not in {w["ref"] for w in acts}), None)
+            if not step:
+                if "runbook exhausted" not in json.dumps(declared["log"]):
+                    self.store.update_work(declared["id"], note="runbook exhausted: needs a human. " + (
+                        self._notify("EMERGENCY %s: runbook exhausted, still %s" % (issue["service"], e["reason"]))
+                        or ""))
+                continue
+            if self.store.q("SELECT COUNT(*) n FROM works WHERE kind='act' AND status!='dry-run' AND created>=?",
+                            (now - 3600,))[0]["n"] >= self.cfg.max_actions_per_hour:
+                continue
+            self._act(key, app, step)
+
+    def _act(self, key, app, step):
+        if not (self.cfg.dispatch and self.cfg.act):
+            why = "dispatch is off" if not self.cfg.dispatch else "AITOMATON_ACT is off"
+            wid = self.store.add_work(key, None, "act", "dry-run", "swarm", "%s %s" % (step, app["name"]))
+            self.store.update_work(wid, note="would %s %s; not done: %s" % (step, app["name"], why), ref=step)
+            return
+        wid = self.store.add_work(key, None, "act", "dispatched", "swarm", "%s %s" % (step, app["name"]))
+        self.store.update_work(wid, ref=step)
+        try:
+            msg = self.actions.run(step, app["id"])
+            self.store.update_work(wid, note=msg, status="done", summary=msg)
+            self._notify("aitomaton %s: %s" % (app["name"], msg))
+        except Exception as e:
+            self.store.update_work(wid, note="%s failed: %s" % (step, e), status="failed")
+
+    def _close_emergencies(self):
+        for w in self.store.works(["running"]):
+            if w["kind"] == "emergency" and w["key"] not in self.emergencies:
+                issue = self.store.issue(w["key"]) or {}
+                over = "resolved" if issue.get("status") == "resolved" else "no longer an emergency"
+                self.store.update_work(w["id"], status="done", note="%s. %s" % (over, self._notify(
+                    "aitomaton %s: %s" % (issue.get("service"), over)) or ""), summary=over)
 
     def _start_fix(self, issue, f, d, service, prom, did, now):
         text = brief(issue, f, d, service, prom, self.cfg, prepared=self._prepares(service))
@@ -297,7 +402,7 @@ class Engine:
             wid = self.store.add_work(issue["key"], did, "fix", "dry-run", "stairway", text)
             self.store.update_work(wid, note="prepared, not sent: " + why, ref=name)
             return
-        running = len(self.store.works(["dispatched", "running", "waiting"]))
+        running = self.store.running_fixes()
         if running >= self.cfg.max_running or self.store.works_since(now - 86400, "fix") >= self.cfg.max_per_day:
             wid = self.store.add_work(issue["key"], did, "fix", "queued", "stairway", text)
             self.store.update_work(wid, note="queued: concurrency or daily limit", ref=name)
@@ -364,7 +469,7 @@ class Engine:
                     self._cleanup(w)
             if self.cfg.dispatch:
                 for w in reversed(self.store.works(["queued"])):
-                    running = len(self.store.works(["dispatched", "running", "waiting"]))
+                    running = self.store.running_fixes()
                     if running >= self.cfg.max_running or \
                             self.store.works_since(time.time() - 86400, "fix") >= self.cfg.max_per_day:
                         break
@@ -390,6 +495,7 @@ class Engine:
                 "analysis": {k: f.get(k) for k in ("new", "regression", "events_1h", "events_24h", "burst",
                                                    "long_term", "cascade", "cascade_root", "service_burst",
                                                    "has_stacktrace", "in_app_frames", "failed_tasks_1h")} if f else None,
+                "emergency": (self.emergencies.get(i["key"]) or {}).get("reason"),
                 "decision": {"action": last["action"], "applied": last["applied"], "at": iso(last["at"]),
                              "decider": last["decider"]} if last else None,
             })
@@ -452,7 +558,16 @@ class Engine:
                                               (time.time() - 86400,))[0]["n"],
                 "works": counts,
                 "in_progress": sum(counts[s] for s in OPEN_WORK),
+                "emergencies": len(self.emergencies),
             },
+            "emergencies": [dict(e, issue=k, since=iso(e["since"]), title=(self.store.issue(k) or {}).get("title"),
+                                 service=(self.store.issue(k) or {}).get("service"),
+                                 policy=self.layer(self.store.issue(k))["label"],
+                                 actions=[{"step": w["ref"], "status": w["status"], "at": iso(w["created"]),
+                                           "note": ((w["log"] or [{}])[-1]).get("note")}
+                                          for w in self.store.q("SELECT * FROM works WHERE key=? AND kind='act' "
+                                                                "AND created>=? ORDER BY id", (k, e["since"] - 1))])
+                            for k, e in self.emergencies.items()],
             "works": works, "findings": findings, "decisions": decisions, "issues": issues,
             "architectures": sorted(archs.values(), key=lambda x: -x["events_24h"]),
             "services": services,

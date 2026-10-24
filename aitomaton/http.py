@@ -42,9 +42,19 @@ class _UnixConnection(http.client.HTTPConnection):
 
 
 def unix_get(socket_path, path, timeout=30):
-    conn = _UnixConnection(socket_path, timeout)
+    return unix_request(socket_path, "GET", path, timeout=timeout)
+
+
+def unix_request(socket_path, method, path, payload=None, timeout=30):
+    """socket_path: a unix socket, or tcp://host:port (e.g. a docker-socket-proxy)."""
+    if socket_path.startswith(("tcp://", "http://")):
+        conn = http.client.HTTPConnection(socket_path.split("://", 1)[1].rstrip("/"), timeout=timeout)
+    else:
+        conn = _UnixConnection(socket_path, timeout)
     try:
-        conn.request("GET", path, headers={"Host": "docker"})
+        body = json.dumps(payload).encode() if payload is not None else None
+        conn.request(method, path, body=body, headers=dict({"Host": "docker"}, **(
+            {"Content-Type": "application/json"} if body is not None else {})))
         r = conn.getresponse()
         body = r.read().decode("utf-8", "replace")
         if r.status >= 400:

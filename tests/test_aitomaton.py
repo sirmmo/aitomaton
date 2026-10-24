@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from aitomaton.analysis import analyze  # noqa: E402
 from aitomaton.config import Config  # noqa: E402
 from aitomaton.deciders import cap, rules  # noqa: E402
+from aitomaton import emergency  # noqa: E402
 from aitomaton.engine import Engine  # noqa: E402
 from aitomaton.executors import experiment_name, fix_branch, parse_result  # noqa: E402
 from aitomaton.server import make_handler  # noqa: E402
@@ -32,7 +33,9 @@ def cfg(**env):
             "STAIRWAY_URL": "", "STAIRWAY_TOKEN": "", "GITHUB_TOKEN": "", "AITOMATON_DISPATCH": "0",
             "JEV_MODEL": "", "JEV_BASE_URL": "", "JEV_API_KEY": "", "AITOMATON_CHAIN": "", "AITOMATON_GIT_TOKEN": "",
             "AITOMATON_INFRA": "1", "AITOMATON_INFRA_REPO": "", "AITOMATON_INFRA_POLICY": "",
-            "AITOMATON_INFRA_CREDENTIAL": ""}
+            "AITOMATON_INFRA_CREDENTIAL": "",
+            "AITOMATON_INFRA_POLICY_EMERGENCY": "", "AITOMATON_EMERGENCY_POLICY": "", "AITOMATON_ACT": "0",
+            "AITOMATON_NOTIFY_URL": ""}
     base.update(env)
     old = {k: os.environ.get(k) for k in base}
     os.environ.update(base)
@@ -693,6 +696,121 @@ class Infrastructure(Served):
         e = self.engine(AITOMATON_INFRA="0")
         self.assertFalse(e.status()["infrastructure"]["enabled"])
         self.assertEqual(fix_branch({"key": "sentry:api:77"}), "aitomaton/fix-77")
+
+
+class FakeActions:
+    def __init__(self):
+        self.calls = []
+
+    def run(self, step, sid):
+        self.calls.append((step, sid))
+        return "did %s" % step
+
+
+class Emergencies(Served):
+    def test_layers(self):
+        self.assertEqual(emergency.parse_policy("push+act"), {"deliver": "push", "act": True})
+        t = {"policy": "pr", "policy_emergency": "push+act"}
+        self.assertEqual(emergency.layer(t, None, None)["label"], "pr")
+        self.assertEqual(emergency.layer(t, None, {"reason": "x"})["label"], "push+act (emergency)")
+        self.assertFalse(emergency.layer(t, {"act": False}, {"reason": "x"})["act"])          # the service vetoes
+        self.assertEqual(emergency.layer({"policy": "observe"}, None, {"reason": "x"})["deliver"], "report")
+        self.assertEqual(emergency.layer({"policy": "pr"}, None, {"reason": "x"}, "act")["label"], "pr+act (emergency)")
+
+    def test_detect(self):
+        c, now = cfg(), time.time()
+        app = {"replicas": {"running": 0, "desired": 2}, "updated_at": now - 7200}
+        f = {"burst": {"burst": False}, "level": "error"}
+        down = {"source": "swarm", "service": "web", "detail": {"kind": "under_replicated", "running": 0, "desired": 2},
+                "flags": {"fired_at": now - 600}}
+        self.assertEqual(emergency.detect(down, f, app, now, c)["runbook"], ["restart"])
+        self.assertEqual(emergency.detect(down, f, dict(app, updated_at=now - 900), now, c)["runbook"],
+                         ["rollback", "restart"])                                        # broke right after a deploy
+        old = dict(down, flags={"fired_at": now - 86400 * 20})
+        self.assertIsNone(emergency.detect(old, f, app, now, c))                         # weeks old: a report
+        node = dict(down, detail=dict(down["detail"], cause="node box is down"))
+        self.assertIsNone(emergency.detect(node, f, app, now, c))                        # the node's emergency
+        quorum = dict(old, detail={"kind": "quorum_lost"})
+        self.assertEqual(emergency.detect(quorum, f, None, now, c)["runbook"], [])       # always, for humans
+        burst = {"source": "sentry", "service": "web", "detail": {}, "flags": {}, "first_seen": now - 120}
+        hot = {"burst": {"burst": True}, "level": "error", "service_burst": True}
+        self.assertEqual(emergency.detect(burst, hot, dict(app, updated_at=now - 600), now, c)["runbook"], ["rollback"])
+        self.assertIsNone(emergency.detect(burst, hot, app, now, c))                     # no recent deploy
+
+    def outage(self, **env):
+        c = cfg(AITOMATON_INFRA_REPO="acme/infra", AITOMATON_INFRA_POLICY="pr", **env)
+        web = dict(descriptor("shop_web", {"com.docker.stack.namespace": "shop"}), id="svc-web",
+                   replicas={"running": 0, "desired": 2}, updated_at=time.time() - 86400)
+        e = Engine(c, Store(":memory:"), swarm_with(c, web))
+        e.actions = FakeActions()
+        e.swarm.health = {"conditions": [], "advisories": [], "nodes": [], "managers": {}, "error": None}
+        e._ingest_health(time.time() - 60)      # the baseline: all was well when aitomaton started
+        cond = swarm_health._cond("under_replicated", "shop_web", "shop_web", "error", "shop_web runs 0 of 2", None,
+                                  {"service": "shop_web", "running": 0, "desired": 2})
+        e.swarm.health = {"conditions": [cond], "advisories": [], "nodes": [], "managers": {}, "error": None}
+        return e
+
+    def test_runbook_runs_once_per_step_and_the_emergency_closes(self):
+        e = self.outage(AITOMATON_INFRA_POLICY_EMERGENCY="push+act", AITOMATON_ACT="1", AITOMATON_DISPATCH="1")
+        now = time.time()
+        e._ingest_health(now)
+        e.tick(now)
+        self.assertEqual(e.actions.calls, [("restart", "svc-web")])
+        d = e.store.decisions()[0]
+        self.assertEqual((d["policy"], d["applied"]), ("push+act (emergency)", "report"))
+        st = e.status()
+        self.assertEqual(st["summary"]["emergencies"], 1)
+        self.assertEqual(st["emergencies"][0]["actions"][0]["status"], "done")
+        e.tick(now + 30)
+        self.assertEqual(len(e.actions.calls), 1)                 # waits for the step to work
+        e.tick(now + 400)
+        self.assertEqual(len(e.actions.calls), 1)                 # one step in this runbook: exhausted
+        em = [w for w in e.store.works() if w["kind"] == "emergency"][0]
+        self.assertIn("runbook exhausted", json.dumps(em["log"]))
+        e.swarm.health = dict(e.swarm.health, conditions=[])
+        e._ingest_health(now + 500)
+        e.tick(now + 500)
+        em = [w for w in e.store.works() if w["kind"] == "emergency"][0]
+        self.assertEqual((em["status"], em["summary"]), ("done", "resolved"))
+
+    def test_without_act_it_is_a_dry_run_and_a_report(self):
+        e = self.outage(AITOMATON_INFRA_POLICY_EMERGENCY="pr+act", AITOMATON_DISPATCH="1")    # AITOMATON_ACT off
+        e._ingest_health(time.time())
+        e.tick()
+        self.assertEqual(e.actions.calls, [])
+        acts = [w for w in e.store.works() if w["kind"] == "act"]
+        self.assertEqual((acts[0]["status"], acts[0]["ref"]), ("dry-run", "restart"))
+        e = self.outage()                                      # no emergency layer: the normal one, no actions
+        e._ingest_health(time.time())
+        e.tick()
+        self.assertEqual([w["kind"] for w in e.store.works()].count("act"), 0)
+        self.assertEqual(e.store.decisions()[0]["policy"], "pr (emergency)")
+
+    def test_broken_before_aitomaton_looked_is_not_an_emergency(self):
+        e = self.outage(AITOMATON_INFRA_POLICY_EMERGENCY="push+act", AITOMATON_ACT="1", AITOMATON_DISPATCH="1")
+        e._health_read = False                  # as if this were the first read after a start
+        e._ingest_health(time.time())
+        e.tick()
+        self.assertEqual((e.emergencies, e.actions.calls), ({}, []))
+        self.assertTrue(e.store.issue("swarm:shop_web:under_replicated")["flags"]["preexisting"])
+
+    def test_raise_memory_through_the_docker_api(self):
+        calls = []
+
+        def fake(sock, method, path, payload=None, timeout=30):
+            calls.append((method, path, payload))
+            return {"ID": "s1", "Version": {"Index": 7}, "Spec": {"Name": "edge_traefik", "TaskTemplate": {
+                "Resources": {"Limits": {"MemoryBytes": 256 * 2 ** 20}}}}} if method == "GET" else None
+        old = emergency.unix_request
+        emergency.unix_request = fake
+        self.addCleanup(setattr, emergency, "unix_request", old)
+        msg = emergency.SwarmActions(cfg()).run("raise_memory", "s1")
+        self.assertEqual(msg, "raised edge_traefik's memory limit from 256 to 384 MiB")
+        method, path, spec = calls[-1]
+        self.assertEqual((method, path), ("POST", "/services/s1/update?version=7"))
+        self.assertEqual(spec["TaskTemplate"]["Resources"]["Limits"]["MemoryBytes"], 384 * 2 ** 20)
+        with self.assertRaises(ValueError):
+            emergency.SwarmActions(cfg()).run("rm -rf", "s1")
 
 
 class Helpers(unittest.TestCase):

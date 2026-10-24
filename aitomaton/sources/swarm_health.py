@@ -69,7 +69,8 @@ def check(nodes, services, tasks, now, ts, grace=300, task_failures=3):
             down[n.get("ID")] = host
             out.append(_cond("node_down", host, None, "fatal" if role == "manager" else "error",
                              "Node %s (%s) is %s" % (host, role, st.get("State")), st.get("Addr"),
-                             {"node": host, "role": role, "state": st.get("State"), "message": st.get("Message")}))
+                             {"node": host, "role": role, "state": st.get("State"), "message": st.get("Message")},
+                             since=ts(n.get("UpdatedAt")) or None))
         if role == "manager" and ms and ms.get("Reachability") != "reachable":
             out.append(_cond("manager_unreachable", host, None, "fatal", "Manager %s is %s" % (
                 host, ms.get("Reachability")), ms.get("Addr"), {"node": host, "reachability": ms.get("Reachability")}))
@@ -120,14 +121,18 @@ def check(nodes, services, tasks, now, ts, grace=300, task_failures=3):
                 "image": ((spec.get("TaskTemplate") or {}).get("ContainerSpec") or {}).get("Image", "").split("@")[0],
                 "resources": (spec.get("TaskTemplate") or {}).get("Resources"),
                 "placement": (spec.get("TaskTemplate") or {}).get("Placement")},
-                failures=[t.get("ID") for t in group]))
+                failures=[t.get("ID") for t in group],
+                since=min(ts((t.get("Status") or {}).get("Timestamp")) for t in group)))
         if desired and len(running) < desired and now - ts(s.get("UpdatedAt")) >= grace:
             missing_on = sorted({down[t["NodeID"]] for t in ts_ if t.get("NodeID") in down})
             d = {"service": name, "running": len(running), "desired": desired}
             if missing_on:
                 d["cause"] = "node %s is down" % ", ".join(missing_on)
+            # short since its last task changed state; an update that started no task does not count
+            last = max([ts((t.get("Status") or {}).get("Timestamp")) for t in ts_] or [ts(s.get("UpdatedAt"))])
             out.append(_cond("under_replicated", name, name, "error" if not running else LEVEL["under_replicated"],
-                             "%s runs %d of %d replicas" % (name, len(running), desired), d.get("cause"), d))
+                             "%s runs %d of %d replicas" % (name, len(running), desired), d.get("cause"), d,
+                             since=last or None))
         us = s.get("UpdateStatus") or {}
         stalled = us.get("State") in ("paused", "rollback_paused", "rollback_completed")
         if stalled and now - ts(us.get("StartedAt")) >= 86400 and not (desired and len(running) < desired):
@@ -146,7 +151,8 @@ def check(nodes, services, tasks, now, ts, grace=300, task_failures=3):
             "managers": {"total": len(managers), "reachable": reachable, "quorum": quorum if managers else 0}}
 
 
-def _cond(kind, subject, service, level, title, culprit, detail, failures=None):
+def _cond(kind, subject, service, level, title, culprit, detail, failures=None, since=None):
+    """since: when the state probably began, from Docker's timestamps (None when unknown)."""
     return {"key": "swarm:%s:%s" % (subject, kind), "kind": kind, "subject": subject, "service": service,
             "level": level, "title": title, "culprit": culprit, "detail": dict(detail, kind=kind),
-            "failures": failures or []}
+            "failures": failures or [], "since": since}
