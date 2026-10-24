@@ -8,6 +8,8 @@ Every input is reduced to the same thing: **occurrences in minute buckets** per 
 | Sentry/urgentry `issue` webhook | issue metadata. `unresolved` marks a regression |
 | poll of `/api/0/projects/{org}/{project}/issues/` | `count` deltas between polls, at `lastSeen`. The first sight seeds history from `stats` (14 daily + 24 hourly buckets) |
 | Alertmanager webhook | issue `prom:<alertname>:<service>`, one occurrence per firing notification |
+| swarm health | issue `swarm:<subject>:<condition>` ([infrastructure.md](infrastructure.md)) |
+| MCP `report_issue` / `add_observation` | issue `user:<service>:<n>`, one occurrence per report, plus an investigation ([mcp.md](mcp.md)) |
 
 Issues are tied to a service (project label, or name match) and through it to an architecture. Every tick
 (`AITOMATON_TICK_SECONDS`, or right after a webhook) the analysis recomputes everything from the buckets.

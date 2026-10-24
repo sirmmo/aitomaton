@@ -33,6 +33,9 @@ class Config:
         self.static_dir = _env("AITOMATON_STATIC", os.path.join(os.path.dirname(__file__), "..", "static"))
         self.tick = _int("AITOMATON_TICK_SECONDS", 30)
         self.status_token = _env("AITOMATON_STATUS_TOKEN")      # optional: protects /status.json and /
+        self.mcp_tokens = _env("AITOMATON_MCP_TOKEN")           # "name:token,...": enables the MCP server at /mcp
+        self.mcp_wait = _int("MCP_DECISION_WAIT_SECONDS", 20)   # a report waits this long for its decision
+        self.mcp_reports_per_hour = _int("MCP_REPORTS_PER_HOUR", 60)  # reports and observations, all callers
 
         # sentry / urgentry (same /api/0/ surface)
         self.sentry_url = (_env("SENTRY_URL") or "").rstrip("/")
@@ -155,6 +158,7 @@ class Config:
             "emergency": {"default_policy": self.emergency_policy, "infra_policy": self.infra_policy_emergency,
                           "act": self.act, "window_s": self.emergency_window,
                           "max_actions_per_hour": self.max_actions_per_hour},
+            "mcp": bool(self.mcp_tokens),
             "laya": bool(self.laya_url),
             "chain": ["rules"] + self.chain,
             "jev": {"model": self.jev_model, "configured": bool(self.jev_model and (

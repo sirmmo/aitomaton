@@ -10,6 +10,7 @@ import os
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from .mcp import MCP, caller
 from .sources.sentry import verify_signature
 
 log = logging.getLogger("aitomaton.http")
@@ -19,6 +20,7 @@ MAX_BODY = 5 * 1024 * 1024
 def make_handler(engine):
     cfg = engine.cfg
     static = os.path.abspath(cfg.static_dir)
+    mcp = MCP(engine)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "aitomaton"
@@ -46,6 +48,8 @@ def make_handler(engine):
         def do_GET(self):
             u = urllib.parse.urlparse(self.path)
             qs = urllib.parse.parse_qs(u.query)
+            if u.path == "/mcp":     # JSON responses only: no server-initiated stream
+                return self._send(405 if cfg.mcp_tokens else 404, {"error": "POST JSON-RPC to /mcp"})
             if u.path == "/health":
                 return self._send(200, {"status": "ok", "last_tick": engine.last_tick})
             if not self._authorized_view(qs):
@@ -70,6 +74,18 @@ def make_handler(engine):
                 payload = json.loads(body or b"{}")
             except ValueError:
                 return self._send(400, {"error": "invalid json"})
+            if u.path == "/mcp":
+                if not cfg.mcp_tokens:
+                    return self._send(404, {"error": "the MCP server is off (AITOMATON_MCP_TOKEN)"})
+                who = caller(cfg, self.headers.get("Authorization"))
+                if not who:
+                    self.send_response(401)
+                    self.send_header("WWW-Authenticate", 'Bearer realm="aitomaton"')
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return None
+                out = mcp.handle(payload, who)
+                return self._send(200, out) if out is not None else self._send(202, b"", "text/plain")
             try:
                 if u.path == "/hooks/sentry":
                     if not verify_signature(cfg.sentry_hook_secret, body, self.headers.get("Sentry-Hook-Signature")):

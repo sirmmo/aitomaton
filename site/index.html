@@ -90,7 +90,7 @@ footer{padding:36px 0 56px;border-top:1px solid var(--line);color:var(--muted);f
 <nav>
   <a class="logo" href="#">ai<span>to</span>maton</a>
   <div class="links">
-    <a class="hide" href="#how">How</a><a class="hide" href="#decide">Decisions</a><a class="hide" href="#labels">Labels</a><a class="hide" href="#infra">Infrastructure</a><a class="hide" href="#emergency">Emergencies</a>
+    <a class="hide" href="#how">How</a><a class="hide" href="#decide">Decisions</a><a class="hide" href="#labels">Labels</a><a class="hide" href="#infra">Infrastructure</a><a class="hide" href="#emergency">Emergencies</a><a class="hide" href="#mcp">MCP</a>
     <a href="demo/">Demo</a><a href="https://github.com/sirmmo/aitomaton">GitHub</a>
   </div>
 </nav>
@@ -241,6 +241,30 @@ AITOMATON_INFRA_POLICY=<span class="s">pr</span>
 <span class="c">#   fix → push      when the tests pass</span></pre>
 </div></section>
 
+<section id="mcp"><div class="wrap two">
+  <div>
+    <h2>Tell it what no log shows</h2>
+    <p class="sub">aitomaton is an MCP server too. Ask it what is going on, or report what no log shows: slowness,
+      strange behaviour, wrong data. It investigates each report and decides on it like any other issue.</p>
+    <ul class="ticks">
+      <li><b>Status tools</b>: overview, a service, an issue with every decision's reasoning.</li>
+      <li><b>Investigated</b>: replicas, failing tasks, recent deploys, related errors and alerts, swarm conditions and metrics at the time of the report.</li>
+      <li><b>Merged and weighed</b>: more people reporting the same thing weigh more; a corroborated report weighs more than a lone one.</li>
+      <li><b>Never on someone's word alone</b>: a critical report pages people, but never triggers direct actions.</li>
+    </ul>
+  </div>
+<pre><span class="c"># claude mcp add --transport http aitomaton …/mcp</span>
+<span class="k">report_issue</span>(
+  title=<span class="s">"newsroom site very slow"</span>,
+  service=<span class="s">"newsroom_api"</span>, kind=<span class="s">"slowness"</span>)
+
+<span class="c"># → user:newsroom_api:1, corroborated</span>
+<span class="c">#   newsroom_api runs 0 of 1 replicas.</span>
+<span class="c">#   4 tasks failed in the last hour.</span>
+<span class="c">#   The service was updated 246 minutes ago.</span>
+<span class="c">#   decision: report</span></pre>
+</div></section>
+
 <section><div class="wrap two">
   <div>
     <h2>A space to fix it in</h2>
@@ -324,6 +348,7 @@ docker stack deploy -c stack.yml aitomaton</pre>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/infrastructure.md"><b>Infrastructure</b><span>swarm health, the outlet repo</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/emergencies.md"><b>Emergencies</b><span>layered policies, runbook, notifications</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/notifications.md"><b>Notifications</b><span>Telegram bot, webhooks</span></a>
+    <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/mcp.md"><b>MCP server</b><span>status tools, reports</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/analysis.md"><b>Analysis</b><span>bursts, trends, cascades</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/decisions.md"><b>Decisions</b><span>rules, laya, JEV, LLM</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/works.md"><b>Works</b><span>fix lifecycle, git, reports</span></a>

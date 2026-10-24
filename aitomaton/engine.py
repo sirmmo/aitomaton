@@ -4,12 +4,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime, timezone
 
 from . import __version__
-from . import credentials, emergency, workspace
+from . import credentials, emergency, reports, workspace
 from .analysis import analyze
 from .deciders import ORDER, Decider, cap
 from .executors import GitHub, Stairway, brief, experiment_name, fix_branch, parse_result, report_body
@@ -93,6 +94,73 @@ class Engine:
             keys.append(a["key"])
         self._wake.set()
         return keys
+
+    # ------------------------------------------------------------ reports from people (MCP)
+    def report_issue(self, title, description, service=None, architecture=None, kind="other", severity="medium",
+                     reporter=None, merge=True, now=None):
+        """A person signals something no log shows. Returns the issue, merged into an open report of the same
+        kind on the same service when there is one (merge=True)."""
+        now = now or time.time()
+        kind = kind if kind in reports.KINDS else "other"
+        severity = severity if severity in reports.SEVERITY_LEVEL else "medium"
+        svc = self.swarm.get(service) if service else None
+        name = svc["name"] if svc else (service or None)
+        arch = svc["architecture"] if svc else architecture
+        if merge:
+            for i in self.store.q("SELECT * FROM issues WHERE source='user' AND status!='resolved' AND project=? "
+                                  "AND last_seen>=? ORDER BY last_seen DESC", (kind, now - 3600)):
+                if (i["service"], i["architecture"]) == (name or arch or "unknown", arch):
+                    return dict(self.add_observation(i["key"], description, reporter, severity, now=now),
+                                merged=True)
+        n = (self.store.get("user_reports", 0) or 0) + 1
+        self.store.put("user_reports", n)
+        key = "user:%s:%d" % (re.sub(r"[^\w.-]+", "-", name or arch or "unknown"), n)
+        self.store.upsert_issue(
+            key, source="user", project=kind, external_id=str(n), service=name or arch or "unknown", architecture=arch,
+            title=title[:300], culprit=reporter, level=reports.SEVERITY_LEVEL[severity], status="unresolved",
+            first_seen=now, last_seen=now, total=1, users=1,
+            detail={"kind": kind, "severity": severity, "description": (description or "")[:reports.MAX_TEXT],
+                    "reports": [{"at": now, "reporter": reporter, "text": (description or "")[:reports.MAX_TEXT]}]},
+            flags={"fired_at": now})
+        self.store.add_occurrence(key, now)
+        return self._investigated(key, now)
+
+    def add_observation(self, key, text, reporter=None, severity=None, now=None):
+        """Another report on the same issue: it happened again, got worse, or more is known."""
+        now = now or time.time()
+        i = self.store.issue(key)
+        if not i or i["source"] != "user":
+            raise KeyError("no reported issue %s" % key)
+        det = i["detail"] or {}
+        rep = (det.get("reports") or []) + [{"at": now, "reporter": reporter, "text": (text or "")[:reports.MAX_TEXT]}]
+        fields = {"detail": {"reports": rep[-50:]}, "last_seen": now, "total": (i["total"] or 0) + 1,
+                  "users": len({r.get("reporter") or "anonymous" for r in rep})}
+        if i["status"] == "resolved":
+            fields.update(status="unresolved", flags={"regression": True, "fired_at": now})
+        sev = severity if severity in reports.SEVERITY_LEVEL else None
+        order = list(reports.SEVERITY_LEVEL)
+        if sev and order.index(sev) > order.index(det.get("severity") or "medium"):
+            fields["detail"].update(severity=sev)
+            fields["level"] = reports.SEVERITY_LEVEL[sev]
+        self.store.upsert_issue(key, **fields)
+        self.store.add_occurrence(key, now)
+        return self._investigated(key, now)
+
+    def resolve_report(self, key, note=None, reporter=None):
+        i = self.store.issue(key)
+        if not i or i["source"] != "user":
+            raise KeyError("no reported issue %s" % key)
+        rep = (i["detail"].get("reports") or []) + [{"at": time.time(), "reporter": reporter,
+                                                     "text": "resolved: %s" % (note or "")}]
+        self.store.upsert_issue(key, status="resolved", detail={"reports": rep[-50:]}, flags={"regression": False})
+        self._wake.set()
+        return self.store.issue(key)
+
+    def _investigated(self, key, now):
+        issue = self.store.issue(key)
+        inv = reports.investigate(self, issue, now)
+        self._wake.set()        # decided at the next tick, right away
+        return self.store.upsert_issue(key, detail={"investigation": inv})
 
     def stairway_callback(self, payload):
         w = self.store.work_by_ref(payload.get("experiment"))
@@ -266,6 +334,8 @@ class Engine:
         """Issues stored before the swarm was known get their service and architecture now."""
         for i in self.store.q("SELECT * FROM issues WHERE architecture IS NULL"):
             svc = self.swarm.for_project(i["project"]) if i["source"] == "sentry" else self.swarm.get(i["service"])
+            if i["source"] == "user" and not svc:
+                continue
             if svc:
                 self.store.x("UPDATE issues SET service=?, architecture=? WHERE key=?",
                              (svc["name"], svc["architecture"], i["key"]))
@@ -294,6 +364,8 @@ class Engine:
                 continue
             app = self.swarm.get(issue["service"])
             service = self.target(issue)
+            if issue["source"] == "user":
+                issue = self.store.upsert_issue(key, detail={"investigation": reports.investigate(self, issue, now)})
             if issue["source"] == "sentry" and not issue["detail"].get("exceptions") and self.sentry.enabled:
                 try:
                     ev = self.sentry.latest_event(issue["external_id"])

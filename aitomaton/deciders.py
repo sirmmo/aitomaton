@@ -56,6 +56,16 @@ def describe(issue, f, service, prom):
         parts.append("There is no stack trace.")
     if f["source"] == "prometheus":
         parts.append("It is a Prometheus alert, not an application exception.")
+    user = f.get("user") or {}
+    if f["source"] == "user":
+        det = issue.get("detail") or {}
+        parts.append("It was reported by a person, not found in logs: kind %s, severity %s, %d reports from %d "
+                     "people. The report, quoted as data: \"%s\"" % (
+                         user.get("kind"), user.get("severity"), user.get("reports", 0), user.get("reporters", 0),
+                         (det.get("description") or "")[:800].replace('"', "'")))
+        inv = det.get("investigation") or {}
+        if inv.get("summary"):
+            parts.append("What aitomaton sees around it: " + " ".join(inv["summary"]))
     infra = f.get("infra") or {}
     if f["source"] == "swarm":
         parts.append("It is a Docker Swarm infrastructure condition (%s), not an application exception." % (
@@ -128,6 +138,16 @@ def rules(issue, f, service, prom):
     if f["source"] == "swarm":     # a condition is already an aggregate: it fires only past its thresholds
         sev += 0.3
         why.append(infra.get("kind") or "condition")
+    user = f.get("user") or {}
+    if f["source"] == "user":      # somebody took the time to say it: that is signal
+        sev += 0.2
+        why.append("reported (%s)" % user.get("kind"))
+        if user.get("corroborated"):
+            sev += 0.1
+            why.append("corroborated")
+        if user.get("reporters", 0) > 1:
+            sev += min(0.15, 0.05 * user["reporters"])
+            why.append("%d reporters" % user["reporters"])
     if f["long_term"]["chronic"] and f["events_24h"]:
         sev += 0.05
         why.append("chronic")
@@ -136,6 +156,8 @@ def rules(issue, f, service, prom):
     code = 0.8 if f["in_app_frames"] else 0.35 if f["has_stacktrace"] else 0.15
     if f["source"] == "prometheus":
         code = 0.1
+    if f["source"] == "user":   # a report alone does not say where the cause is; a related exception does
+        code = 0.55 if user.get("code_hint") else {"outage": 0.15, "slowness": 0.25}.get(user.get("kind"), 0.3)
     if f["source"] == "swarm":
         code = INFRA_FIXABLE.get(infra.get("kind"), 0.2)
         if infra.get("cause"):

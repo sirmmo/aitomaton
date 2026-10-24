@@ -83,6 +83,9 @@ def detect(issue, f, app, now, cfg):
             (f.get("service_burst") or f["level"] in ("fatal", "critical")):
         return {"reason": "error burst on %s right after a deploy" % issue["service"], "runbook": ["rollback"],
                 "since": since}
+    if issue["source"] == "user" and det.get("severity") == "critical":
+        # a person says production is broken: page humans, but never act on someone's word alone
+        return {"reason": "reported as critical: %s" % issue.get("title"), "runbook": [], "since": since}
     if issue["source"] == "prometheus" and f["level"] == "fatal" and app:
         return {"reason": "critical alert: %s" % issue.get("title"), "runbook": [], "since": since}
     return None

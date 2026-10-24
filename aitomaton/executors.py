@@ -20,7 +20,7 @@ def experiment_name(prefix, service, issue_key):
 def fix_branch(issue):
     """Sentry ids are unique; swarm and alert keys need their subject too (swarm:<service>:oom)."""
     key = issue["key"]
-    tail = key.split(":", 1)[-1] if key.startswith(("swarm:", "prom:")) else key.split(":")[-1]
+    tail = key.split(":", 1)[-1] if key.startswith(("swarm:", "prom:", "user:")) else key.split(":")[-1]
     return "aitomaton/fix-%s" % re.sub(r"[^\w-]+", "-", tail).strip("-")
 
 
@@ -118,6 +118,11 @@ def brief(issue, features, decision, service, prom, cfg, prepared=False):
         "- Release: %s, environment: %s" % (det.get("release"), det.get("environment")),
         "- Link: %s" % (issue.get("url") or "-"),
     ]
+    if issue.get("source") == "user":
+        lines += ["", "### What people reported (not in any log)"] + ["- %s (%s): %s" % (
+            r.get("at"), r.get("reporter") or "anonymous", r.get("text")) for r in det.get("reports") or []]
+        lines += ["", "### What aitomaton saw around it"] + ["- " + x for x in (det.get("investigation") or {}).get(
+            "summary") or []]
     if infra:
         lines += ["", "### Condition", "```json", json.dumps(det, indent=1, default=str)[:4000], "```"]
     for e in det.get("exceptions") or []:
@@ -142,18 +147,28 @@ def brief(issue, features, decision, service, prom, cfg, prepared=False):
 
 
 def report_body(issue, features, decision, prom):
-    return "\n".join([
+    det = issue.get("detail") or {}
+    lines = [
         "aitomaton found an error that needs a human.", "",
         "**%s**" % issue.get("title"), "",
         "- service: `%s`, level: %s, events 1h/24h/total: %s/%s/%s, users: %s" % (
             issue.get("service"), issue.get("level"), features["events_1h"], features["events_24h"],
             issue.get("total"), issue.get("users")),
         "- link: %s" % (issue.get("url") or issue["key"]), "",
+    ]
+    if issue.get("source") == "user":
+        lines += ["**Reported by people** (%s):" % det.get("kind"), ""]
+        lines += ["> %s — %s" % ((r.get("text") or "").replace("\n", " ")[:500], r.get("reporter") or "anonymous")
+                  for r in det.get("reports") or []]
+        lines += ["", "**What aitomaton saw around it**", ""]
+        lines += ["- " + x for x in (det.get("investigation") or {}).get("summary") or []] + [""]
+    lines += [
         "**Decision** (%s, confidence %.2f): %s" % (decision["decider"], decision["confidence"], decision["rationale"]),
         "", decision.get("state", ""), "",
         "<details><summary>analysis</summary>\n\n```json\n%s\n```\n</details>" % json.dumps(
             {"features": features, "metrics": prom}, indent=1, default=str)[:20000],
-    ])
+    ]
+    return "\n".join(lines)
 
 
 def parse_result(text):

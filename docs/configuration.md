@@ -13,6 +13,9 @@ the stack file. Per-service behaviour comes from [service labels](labels.md).
 | `AITOMATON_STATIC` | `./static` | folder served at `/` |
 | `AITOMATON_TICK_SECONDS` | `30` | loop period. Webhooks wake the loop earlier |
 | `AITOMATON_STATUS_TOKEN` | none | protects `/` and `/status.json` (`?token=` or `Authorization: Bearer`) |
+| `AITOMATON_MCP_TOKEN` | none | enables the [MCP server](mcp.md) at `/mcp`: `name:token`, comma separated |
+| `MCP_DECISION_WAIT_SECONDS` | `20` | how long `report_issue` waits for the decision before answering |
+| `MCP_REPORTS_PER_HOUR` | `60` | reports and observations per hour, all callers together |
 
 ## Inputs
 

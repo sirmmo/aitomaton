@@ -76,6 +76,11 @@ def analyze(store, swarm, cfg, now):
             "has_stacktrace": bool(frames), "in_app_frames": sum(1 for x in frames if x.get("in_app")),
             "source": i["source"],
             "infra": {"kind": detail.get("kind"), "cause": detail.get("cause")} if i["source"] == "swarm" else None,
+            "user": {"kind": detail.get("kind"), "severity": detail.get("severity"), "reports": i["total"] or 0,
+                     "reporters": i["users"] or 0,
+                     "corroborated": bool((detail.get("investigation") or {}).get("corroborated")),
+                     "code_hint": (detail.get("investigation") or {}).get("code_hint", 0)}
+            if i["source"] == "user" else None,
             "burst": b, "long_term": lt,
         }
         per_issue[i["key"]] = f

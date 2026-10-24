@@ -199,6 +199,7 @@ function render(d) {
     if (a.long_term && a.long_term.rising) f.push("rising"); else if (a.long_term && a.long_term.chronic) f.push("chronic");
     if (a.cascade) f.push(a.cascade_root ? "cascade root" : "cascade");
     if (i.emergency) f.push("emergency");
+    if (i.source === "user") f.push(`reported ×${i.total}` + (i.users > 1 ? ` by ${i.users}` : ""));
     if (i.decision) f.push("→ " + i.decision.applied);
     return `<tr><td>${badge(i.level || "?", "l-" + (i.level || ""))}</td>
       <td class="title">${i.url ? link(i.url, i.title) : esc(i.title)}<div class="muted mono">${esc(i.culprit || "")}</div></td>

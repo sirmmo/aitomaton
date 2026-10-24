@@ -69,6 +69,9 @@ on the page, but sends nothing until you turn it on.
   second policy layer (`aitomaton.policy.emergency: push+act`) applies: aitomaton pushes instead of opening a
   PR, notifies, and works through a fixed runbook (restart, roll back, raise the memory limit), one verified
   step at a time. Emergencies are detected by rules, and no model gets write access to the swarm.
+- **Talk to it.** An MCP server lets people and their agents ask what's going on, and report what no log
+  shows, such as slowness or strange behaviour. aitomaton investigates each report against errors, deploys,
+  metrics and the swarm, then decides on it like any other issue.
 - **One JSON for everything.** `/status.json` lists works in progress, findings, every decision with each
   tier's reasoning, and the issues with their analysis. `/` renders it.
 
@@ -81,6 +84,7 @@ on the page, but sends nothing until you turn it on.
 | [Infrastructure](docs/infrastructure.md) | the swarm itself: nodes, quorum, replicas, OOM kills, and the outlet repo they go to |
 | [Emergencies](docs/emergencies.md) | layered policies, the direct-action runbook, notifications |
 | [Notifications](docs/notifications.md) | the Telegram bot, webhooks, which events |
+| [MCP server](docs/mcp.md) | ask aitomaton what is going on; report what no log shows (slowness, odd behaviour) |
 | [Analysis](docs/analysis.md) | bursts, trends, cascades, findings |
 | [Decisions](docs/decisions.md) | rules, laya, JEV, LLM, the chain, guard rails |
 | [Works](docs/works.md) | the fix lifecycle, the agent's result protocol, git handling, reports |

@@ -160,6 +160,13 @@ class DemoActions:      # the demo has no swarm to act on
 engine.actions = DemoActions()
 engine._ingest_health(now)
 
+# what no log shows: two people say the cart is slow (MCP report_issue, merged into one report)
+engine.report_issue("Cart page takes 15-20 s to load", "Since about 10 minutes the cart spins before showing "
+                    "anything; checkout eventually works.", "shop_api", kind="slowness", severity="high",
+                    reporter="support-desk", now=now - 120)
+engine.report_issue("cart is very slow", "Customers on chat complain the cart is slow.", "shop_api",
+                    kind="slowness", severity="medium", reporter="ada", now=now - 60)
+
 engine.tick(now)
 
 # what the works look like once stairway and GitHub have answered (the demo has neither)

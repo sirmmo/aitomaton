@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import unittest
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -16,6 +17,7 @@ from aitomaton.config import Config  # noqa: E402
 from aitomaton.deciders import cap, rules  # noqa: E402
 from aitomaton import emergency  # noqa: E402
 from aitomaton.engine import Engine  # noqa: E402
+from aitomaton.mcp import caller  # noqa: E402
 from aitomaton.notify import Notifier, parse_chats  # noqa: E402
 from aitomaton.executors import experiment_name, fix_branch, parse_result  # noqa: E402
 from aitomaton.server import make_handler  # noqa: E402
@@ -37,7 +39,8 @@ def cfg(**env):
             "AITOMATON_INFRA_CREDENTIAL": "",
             "AITOMATON_INFRA_POLICY_EMERGENCY": "", "AITOMATON_EMERGENCY_POLICY": "", "AITOMATON_ACT": "0",
             "AITOMATON_NOTIFY_URL": "", "AITOMATON_TELEGRAM_TOKEN": "", "AITOMATON_TELEGRAM_CHAT": "",
-            "AITOMATON_NOTIFY_EVENTS": "", "AITOMATON_SECRETS_DIR": "/nonexistent"}
+            "AITOMATON_NOTIFY_EVENTS": "", "AITOMATON_SECRETS_DIR": "/nonexistent", "AITOMATON_MCP_TOKEN": "",
+            "MCP_DECISION_WAIT_SECONDS": "0"}
     base.update(env)
     old = {k: os.environ.get(k) for k in base}
     os.environ.update(base)
@@ -888,6 +891,90 @@ class Telegram(Served):
         self.assertIn("EMERGENCY shop_web", FakeTelegram.calls[0][1]["text"])
         self.assertEqual(e.status()["config"]["notify"], {"telegram": 1, "webhook": False,
                                                           "events": ["emergency", "fix"]})
+
+
+class McpServer(Served):
+    def engine(self, **env):
+        c = cfg(AITOMATON_MCP_TOKEN="ada:tok-ada-123456,tok-anon-123456", **env)
+        e = Engine(c, Store(":memory:"), swarm_with(c, API, WEB, DB))
+        handler = make_handler(e)
+        return e, self.serve(handler)
+
+    def rpc(self, url, method, params=None, token="tok-ada-123456", mid=1):
+        req = urllib.request.Request(url + "/mcp", json.dumps(
+            {"jsonrpc": "2.0", "id": mid, "method": method, "params": params or {}}).encode(),
+            {"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
+             "Authorization": "Bearer " + token})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read())
+
+    def tool(self, url, name, **args):
+        r = self.rpc(url, "tools/call", {"name": name, "arguments": args})["result"]
+        return r["structuredContent"], r["isError"]
+
+    def test_tokens(self):
+        c = cfg(AITOMATON_MCP_TOKEN="ada:tok-ada-123456, tok-anon-123456")
+        self.assertEqual(caller(c, "Bearer tok-ada-123456"), "ada")
+        self.assertEqual(caller(c, "Bearer tok-anon-123456"), "mcp")
+        self.assertIsNone(caller(c, "Bearer nope"))
+        self.assertIsNone(caller(c, None))
+
+    def test_auth_and_handshake(self):
+        e, url = self.engine()
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.rpc(url, "initialize", token="wrong")
+        self.assertEqual(ctx.exception.code, 401)
+        init = self.rpc(url, "initialize", {"protocolVersion": "2025-06-18"})["result"]
+        self.assertEqual(init["serverInfo"]["name"], "aitomaton")
+        names = {t["name"] for t in self.rpc(url, "tools/list")["result"]["tools"]}
+        self.assertEqual(names, {"status", "service_status", "list_issues", "get_issue", "report_issue",
+                                 "add_observation", "resolve_report"})
+        c = cfg()
+        off = self.serve(make_handler(Engine(c, Store(":memory:"), swarm_with(c))))
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.rpc(off, "initialize")
+        self.assertEqual(ctx.exception.code, 404)
+
+    def test_a_report_is_investigated_merged_decided_and_resolved(self):
+        e, url = self.engine()
+        self.burst_of(e, "api", "77")
+        e.tick()
+        out, err = self.tool(url, "report_issue", title="checkout takes 20 s", service="api", kind="slowness",
+                             severity="high", description="Since 10:00 the cart page hangs before loading.")
+        self.assertFalse(err, out)
+        key = out["key"]
+        self.assertTrue(key.startswith("user:shop_api:"))
+        self.assertTrue(out["investigation"]["corroborated"])
+        self.assertEqual(out["investigation"]["related"][0]["key"], "sentry:api:77")
+        e.tick()
+        d = e.store.last_decision(key)
+        self.assertIn(d["applied"], ("report", "fix"))
+        self.assertIn("reported (slowness)", d["rationale"])
+        again, _ = self.tool(url, "report_issue", title="cart is slow", service="shop_api", kind="slowness",
+                             description="Same here", reporter="bob")
+        self.assertEqual((again["key"], again["merged"], again["reporters"]), (key, True, 2))
+        got, _ = self.tool(url, "get_issue", key=key)
+        self.assertEqual(got["detail"]["reports"][0]["reporter"], "ada")
+        self.assertTrue(got["decisions"])
+        listed, _ = self.tool(url, "list_issues", source="user")
+        self.assertEqual([i["key"] for i in listed["issues"]], [key])
+        svc, _ = self.tool(url, "service_status", service="api")
+        self.assertIn(key, [i["key"] for i in svc["issues"]])
+        done, _ = self.tool(url, "resolve_report", key=key, note="cache warmed")
+        self.assertEqual(done["status"], "resolved")
+        st, _ = self.tool(url, "status")
+        self.assertIn("summary", st)
+        bad, err = self.tool(url, "report_issue", title="x", description="y", service="apii")
+        self.assertTrue(err)
+        self.assertIn("did you mean", bad["error"])
+
+    def test_critical_report_pages_but_never_acts(self):
+        e, url = self.engine(AITOMATON_EMERGENCY_POLICY="push+act")
+        out, _ = self.tool(url, "report_issue", title="site is down for everyone", service="shop_web",
+                           kind="outage", severity="critical", description="502 on every page")
+        e.tick()
+        self.assertEqual(e.emergencies[out["key"]]["runbook"], [])
+        self.assertEqual(e.store.last_decision(out["key"])["applied"], "report")
 
 
 class Helpers(unittest.TestCase):
