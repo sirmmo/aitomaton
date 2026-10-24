@@ -16,6 +16,7 @@ from aitomaton.config import Config  # noqa: E402
 from aitomaton.deciders import cap, rules  # noqa: E402
 from aitomaton import emergency  # noqa: E402
 from aitomaton.engine import Engine  # noqa: E402
+from aitomaton.notify import Notifier, parse_chats  # noqa: E402
 from aitomaton.executors import experiment_name, fix_branch, parse_result  # noqa: E402
 from aitomaton.server import make_handler  # noqa: E402
 from aitomaton.sources.prometheus import parse_alertmanager  # noqa: E402
@@ -35,7 +36,8 @@ def cfg(**env):
             "AITOMATON_INFRA": "1", "AITOMATON_INFRA_REPO": "", "AITOMATON_INFRA_POLICY": "",
             "AITOMATON_INFRA_CREDENTIAL": "",
             "AITOMATON_INFRA_POLICY_EMERGENCY": "", "AITOMATON_EMERGENCY_POLICY": "", "AITOMATON_ACT": "0",
-            "AITOMATON_NOTIFY_URL": ""}
+            "AITOMATON_NOTIFY_URL": "", "AITOMATON_TELEGRAM_TOKEN": "", "AITOMATON_TELEGRAM_CHAT": "",
+            "AITOMATON_NOTIFY_EVENTS": "", "AITOMATON_SECRETS_DIR": "/nonexistent"}
     base.update(env)
     old = {k: os.environ.get(k) for k in base}
     os.environ.update(base)
@@ -811,6 +813,81 @@ class Emergencies(Served):
         self.assertEqual(spec["TaskTemplate"]["Resources"]["Limits"]["MemoryBytes"], 384 * 2 ** 20)
         with self.assertRaises(ValueError):
             emergency.SwarmActions(cfg()).run("rm -rf", "s1")
+
+
+class FakeTelegram(BaseHTTPRequestHandler):
+    calls = []
+    fail = False
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        msg = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        FakeTelegram.calls.append((self.path, msg))
+        body = json.dumps({"ok": not FakeTelegram.fail, "result": {}}).encode()
+        self.send_response(403 if FakeTelegram.fail else 200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        body = json.dumps({"ok": True, "result": [
+            {"message": {"chat": {"id": 42, "first_name": "Ada"}}},
+            {"message": {"chat": {"id": -1009, "title": "ops"}, "message_thread_id": 5, "is_topic_message": True}}]
+        }).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+class Telegram(Served):
+    TOKEN = "123456:AAH-secret-bot-token"
+
+    def setUp(self):
+        super().setUp()
+        FakeTelegram.calls[:], FakeTelegram.fail = [], False
+        self.api = self.serve(FakeTelegram)
+
+    def test_chats_and_failures_are_redacted(self):
+        self.assertEqual(parse_chats("42, -1009/5"), [("42", None), ("-1009", 5)])
+        n = Notifier(cfg(AITOMATON_TELEGRAM_TOKEN=self.TOKEN, AITOMATON_TELEGRAM_API=self.api,
+                         AITOMATON_TELEGRAM_CHAT="42,-1009/5"))
+        self.assertEqual(n.telegram_chats(), {"42": "Ada", "-1009/5": "ops"})
+        self.assertEqual(n.send("emergency", "hi"), "notified telegram 42; notified telegram -1009")
+        self.assertEqual(FakeTelegram.calls[1][1]["message_thread_id"], 5)
+        self.assertEqual(FakeTelegram.calls[0][0], "/bot%s/sendMessage" % self.TOKEN)
+        self.assertIsNone(n.send("report", "not subscribed"))                # default events: emergency, fix
+        FakeTelegram.fail = True
+        out = n.send("fix", "x")
+        self.assertIn("failed", out)
+        self.assertNotIn("secret-bot-token", out)
+
+    def test_token_from_a_docker_secret(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "aitomaton_telegram_token"), "w") as fh:
+            fh.write(self.TOKEN + "\n")
+        self.assertEqual(Notifier(cfg(AITOMATON_SECRETS_DIR=d)).token, self.TOKEN)
+
+    def test_an_emergency_reaches_the_global_and_the_service_chats(self):
+        c = cfg(AITOMATON_TELEGRAM_TOKEN=self.TOKEN, AITOMATON_TELEGRAM_API=self.api, AITOMATON_TELEGRAM_CHAT="42",
+                AITOMATON_DISPATCH="1")
+        web = dict(descriptor("shop_web", {"com.docker.stack.namespace": "shop", "aitomaton.notify.telegram": "-77"}),
+                   id="svc-web", replicas={"running": 0, "desired": 2}, updated_at=time.time() - 86400)
+        e = Engine(c, Store(":memory:"), swarm_with(c, web))
+        e.swarm.health = {"conditions": [], "advisories": [], "nodes": [], "managers": {}, "error": None}
+        e._ingest_health(time.time() - 60)
+        e.swarm.health = dict(e.swarm.health, conditions=[swarm_health._cond(
+            "under_replicated", "shop_web", "shop_web", "error", "shop_web runs 0 of 2", None,
+            {"service": "shop_web", "running": 0, "desired": 2})])
+        e._ingest_health(time.time())
+        e.tick()
+        self.assertEqual(sorted(m["chat_id"] for _, m in FakeTelegram.calls), ["-77", "42"])
+        self.assertIn("EMERGENCY shop_web", FakeTelegram.calls[0][1]["text"])
+        self.assertEqual(e.status()["config"]["notify"], {"telegram": 1, "webhook": False,
+                                                          "events": ["emergency", "fix"]})
 
 
 class Helpers(unittest.TestCase):

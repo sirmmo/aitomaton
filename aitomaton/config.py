@@ -109,7 +109,13 @@ class Config:
         self.max_actions_per_hour = _int("MAX_ACTIONS_PER_HOUR", 3)
         self.act_memory_factor = _float("ACT_MEMORY_FACTOR", 1.5)
         self.act_memory_max_mb = _int("ACT_MEMORY_MAX_MB", 8192)
-        self.notify_url = _env("AITOMATON_NOTIFY_URL")           # Slack-compatible incoming webhook
+        # notifications (notify.py): a Telegram bot and/or a Slack-compatible webhook
+        self.notify_url = _env("AITOMATON_NOTIFY_URL")
+        self.telegram_token = _env("AITOMATON_TELEGRAM_TOKEN")   # or the Docker secret aitomaton_telegram_token
+        self.telegram_chats = _env("AITOMATON_TELEGRAM_CHAT", "")
+        self.telegram_api = (_env("AITOMATON_TELEGRAM_API", "https://api.telegram.org")).rstrip("/")
+        self.notify_events = [e.strip() for e in _env("AITOMATON_NOTIFY_EVENTS", "emergency,fix").split(",")
+                              if e.strip()]
 
         # execution
         self.dispatch = _bool("AITOMATON_DISPATCH", False)       # off: works are prepared (dry-run), not sent
@@ -147,7 +153,7 @@ class Config:
             "infrastructure": {"enabled": self.infra, "name": self.infra_name, "repo": self.infra_repo,
                                "policy": self.infra_policy},
             "emergency": {"default_policy": self.emergency_policy, "infra_policy": self.infra_policy_emergency,
-                          "act": self.act, "notify": bool(self.notify_url), "window_s": self.emergency_window,
+                          "act": self.act, "window_s": self.emergency_window,
                           "max_actions_per_hour": self.max_actions_per_hour},
             "laya": bool(self.laya_url),
             "chain": ["rules"] + self.chain,

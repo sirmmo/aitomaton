@@ -63,7 +63,18 @@ See [emergencies.md](emergencies.md).
 | `ACT_VERIFY_SECONDS` | `300` | time a step gets to work before the next one |
 | `MAX_ACTIONS_PER_HOUR` | `3` | direct actions on the whole swarm |
 | `ACT_MEMORY_FACTOR` / `ACT_MEMORY_MAX_MB` | `1.5` / `8192` | how `raise_memory` raises a limit, and its ceiling |
+
+## Notifications
+
+See [notifications.md](notifications.md).
+
+| variable | default | meaning |
+|---|---|---|
+| `AITOMATON_TELEGRAM_TOKEN` | the Docker secret `aitomaton_telegram_token` | bot token from @BotFather |
+| `AITOMATON_TELEGRAM_CHAT` | none | chat ids, comma separated. `<chat>/<topic>` posts in a forum topic |
+| `AITOMATON_TELEGRAM_API` | `https://api.telegram.org` | or a self-hosted Bot API server |
 | `AITOMATON_NOTIFY_URL` | none | Slack-compatible incoming webhook (Slack, Mattermost, Rocket.Chat, Discord's `/slack`) |
+| `AITOMATON_NOTIFY_EVENTS` | `emergency,fix` | what is notified: `emergency`, `fix` (PR opened, pushed, failed), `report` (GitHub issue opened) |
 
 ## Analysis
 

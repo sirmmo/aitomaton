@@ -170,12 +170,6 @@ def parse_result(text):
     return {"status": "pr", "url": pr.group(0), "summary": ""} if pr and "AITOMATON-RESULT" in (text or "") else None
 
 
-def notify(cfg, text):
-    """A Slack-compatible incoming webhook (Slack, Mattermost, Rocket.Chat; Discord reads "content")."""
-    if cfg.notify_url:
-        request("POST", cfg.notify_url, {"text": text, "content": text[:1900], "username": "aitomaton"}, timeout=15)
-
-
 class Stairway:
     def __init__(self, cfg):
         self.cfg = cfg

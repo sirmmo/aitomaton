@@ -80,6 +80,7 @@ on the page, but sends nothing until you turn it on.
 | [Service labels](docs/labels.md) | the descriptor labels, policies, git credentials |
 | [Infrastructure](docs/infrastructure.md) | the swarm itself: nodes, quorum, replicas, OOM kills, and the outlet repo they go to |
 | [Emergencies](docs/emergencies.md) | layered policies, the direct-action runbook, notifications |
+| [Notifications](docs/notifications.md) | the Telegram bot, webhooks, which events |
 | [Analysis](docs/analysis.md) | bursts, trends, cascades, findings |
 | [Decisions](docs/decisions.md) | rules, laya, JEV, LLM, the chain, guard rails |
 | [Works](docs/works.md) | the fix lifecycle, the agent's result protocol, git handling, reports |

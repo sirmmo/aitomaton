@@ -11,6 +11,7 @@ Descriptor labels (service labels, or container labels as a fallback), with pref
   aitomaton.policy              observe | report | pr | push   (the most aitomaton may do)
   aitomaton.policy.emergency    the layer in force during an emergency, e.g. push+act (see emergency.py)
   aitomaton.act                 false: never run direct actions on this service, whatever the policies say
+  aitomaton.notify.telegram     more Telegram chats for this service's notifications ("<chat>[/<topic>]", ...)
   aitomaton.sentry.project      Sentry/urgentry project slug(s) for this service, comma separated
   aitomaton.architecture        group name for architecture-wide analysis (default: the stack namespace)
   aitomaton.depends             services this one depends on, comma separated (helps find cascade roots)
@@ -99,7 +100,7 @@ def descriptor(name, labels, prefix="aitomaton", default_policy="report"):
         "prometheus_selector": g("prometheus.selector"),
         "agent": g("agent"), "model": g("model"),
         "git_credential": g("git.credential"), "git_author": g("git.author"),
-        "test": g("test"), "notes": g("notes"),
+        "test": g("test"), "notes": g("notes"), "notify_telegram": g("notify.telegram"),
         # the deployment's repo, independent of aitomaton.enable: third-party images cannot be fixed upstream,
         # but their limits, tags and placement in your stack files can
         "infra": {"repo": normalize_repo(g("infra.repo")), "ref": g("infra.ref"), "path": g("infra.path"),

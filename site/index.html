@@ -225,6 +225,7 @@ AITOMATON_INFRA_POLICY=<span class="s">pr</span>
       <li><b>Emergencies by rules</b>: a lost quorum, a service at 0 replicas, OOM kills that leave it short, an error burst right after a deploy.</li>
       <li><b>A fixed runbook</b>: restart, roll back, raise the memory limit. aitomaton runs it through the Docker API, one step at a time, each step checked before the next. No model gets write access to the swarm.</li>
       <li><b>Bounded</b>: off unless <code>AITOMATON_ACT=1</code>, per-service veto, at most a few actions an hour, never on outages older than aitomaton itself.</li>
+      <li><b>Told where you are</b>: a Telegram bot (global chats, plus a team's group per service) or any Slack-compatible webhook.</li>
       <li><b>Then made permanent</b>: the direct action buys time; the PR to the stack file is the fix.</li>
     </ul>
   </div>
@@ -322,6 +323,7 @@ docker stack deploy -c stack.yml aitomaton</pre>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/labels.md"><b>Service labels</b><span>descriptors, policies, credentials</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/infrastructure.md"><b>Infrastructure</b><span>swarm health, the outlet repo</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/emergencies.md"><b>Emergencies</b><span>layered policies, runbook, notifications</span></a>
+    <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/notifications.md"><b>Notifications</b><span>Telegram bot, webhooks</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/analysis.md"><b>Analysis</b><span>bursts, trends, cascades</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/decisions.md"><b>Decisions</b><span>rules, laya, JEV, LLM</span></a>
     <a class="doc" href="https://github.com/sirmmo/aitomaton/blob/main/docs/works.md"><b>Works</b><span>fix lifecycle, git, reports</span></a>

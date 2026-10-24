@@ -30,7 +30,7 @@ services:
       - /srv:/srv
     # git credentials as Docker secrets: a service labelled aitomaton.git.credential=<name> uses
     # /run/secrets/aitomaton_git_<name>. Create with: printf %s "$TOKEN" | docker secret create aitomaton_git_<name> -
-    # secrets: [aitomaton_git_shop]
+    # secrets: [aitomaton_git_shop, aitomaton_telegram_token]
     networks: [aitomaton]
     deploy:
       replicas: 1

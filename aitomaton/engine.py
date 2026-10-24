@@ -12,7 +12,8 @@ from . import __version__
 from . import credentials, emergency, workspace
 from .analysis import analyze
 from .deciders import ORDER, Decider, cap
-from .executors import GitHub, Stairway, brief, experiment_name, fix_branch, notify, parse_result, report_body
+from .executors import GitHub, Stairway, brief, experiment_name, fix_branch, parse_result, report_body
+from .notify import Notifier
 from .sources.prometheus import Prometheus, parse_alertmanager
 from .sources.sentry import SentryClient, issue_key, parse_webhook, summarize_event
 from .store import OPEN_WORK, Store
@@ -36,6 +37,7 @@ class Engine:
         self.stairway = Stairway(cfg)
         self.github = GitHub(cfg)
         self.actions = emergency.SwarmActions(cfg)
+        self.notifier = Notifier(cfg)
         self.emergencies = {}       # issue key -> {"reason", "runbook", "since"}, recomputed every tick
         self._health_read = False   # the first read after start is the baseline: what is already broken
         self.analysis = {"issues": {}, "services": {}, "cascades": {}, "findings": []}
@@ -115,6 +117,12 @@ class Engine:
             status, url, note = self._open_pr(w, res)
         self.store.update_work(w["id"], note=note, status=status, result_url=url, summary=res.get("summary"))
         self._cleanup(w)
+        issue = self.store.issue(w["key"]) or {}
+        sent = self._notify("fix", "aitomaton %s: fix %s%s\n%s%s" % (
+            issue.get("service"), status, " (%s)" % res.get("status") if status != "done" else "",
+            issue.get("title") or w["key"], "\n" + url if url else ""), issue.get("service"))
+        if sent:
+            self.store.update_work(w["id"], note=sent)
 
     def _open_pr(self, w, res):
         issue = self.store.issue(w["key"]) or {}
@@ -325,16 +333,15 @@ class Engine:
                     out[key] = e
         return out
 
-    def _notify(self, text):
-        if not self.cfg.dispatch:
-            return "not sent: dispatch is off"
-        if not self.cfg.notify_url:
+    def _notify(self, event, text, service=None):
+        """service: a name or descriptor; its aitomaton.notify.telegram chats are added."""
+        svc = self.swarm.get(service) if isinstance(service, str) else service
+        own = bool(self.notifier.token and (svc or {}).get("notify_telegram"))
+        if event not in self.cfg.notify_events or not (self.notifier.configured() or own):
             return None
-        try:
-            notify(self.cfg, text)
-            return "notified"
-        except Exception as e:
-            return "notification failed: %s" % e
+        if not self.cfg.dispatch:
+            return "notification not sent: dispatch is off"
+        return self.notifier.send(event, text, svc)
 
     def _handle_emergencies(self, now):
         """Declare each emergency once per episode, run the next runbook step when the layer allows it,
@@ -351,7 +358,8 @@ class Engine:
                     issue["service"], e["reason"], lay["label"], ", ".join(e["runbook"]) or "none: needs a human",
                     "%s/#%s" % (self.cfg.public_url, key))
                 wid = self.store.add_work(key, None, "emergency", "running", "swarm", text)
-                self.store.update_work(wid, note=self._notify(text) or "declared", ref=e["reason"][:120])
+                self.store.update_work(wid, note=self._notify("emergency", text, issue["service"]) or "declared",
+                                       ref=e["reason"][:120])
                 declared = self.store.work(wid)
             acts = [w for w in episode if w["kind"] == "act"]
             if not (lay["act"] and app and app.get("id") and e["runbook"]):
@@ -362,7 +370,8 @@ class Engine:
             if not step:
                 if "runbook exhausted" not in json.dumps(declared["log"]):
                     self.store.update_work(declared["id"], note="runbook exhausted: needs a human. " + (
-                        self._notify("EMERGENCY %s: runbook exhausted, still %s" % (issue["service"], e["reason"]))
+                        self._notify("emergency", "EMERGENCY %s: runbook exhausted, still %s" % (
+                            issue["service"], e["reason"]), issue["service"])
                         or ""))
                 continue
             if self.store.q("SELECT COUNT(*) n FROM works WHERE kind='act' AND status!='dry-run' AND created>=?",
@@ -381,7 +390,7 @@ class Engine:
         try:
             msg = self.actions.run(step, app["id"])
             self.store.update_work(wid, note=msg, status="done", summary=msg)
-            self._notify("aitomaton %s: %s" % (app["name"], msg))
+            self._notify("emergency", "aitomaton %s: %s" % (app["name"], msg), app)
         except Exception as e:
             self.store.update_work(wid, note="%s failed: %s" % (step, e), status="failed")
 
@@ -391,7 +400,8 @@ class Engine:
                 issue = self.store.issue(w["key"]) or {}
                 over = "resolved" if issue.get("status") == "resolved" else "no longer an emergency"
                 self.store.update_work(w["id"], status="done", note="%s. %s" % (over, self._notify(
-                    "aitomaton %s: %s" % (issue.get("service"), over)) or ""), summary=over)
+                    "emergency", "aitomaton %s: emergency over, %s" % (issue.get("service"), over),
+                    issue.get("service")) or ""), summary=over)
 
     def _start_fix(self, issue, f, d, service, prom, did, now):
         text = brief(issue, f, d, service, prom, self.cfg, prepared=self._prepares(service))
@@ -444,6 +454,10 @@ class Engine:
             try:
                 url = self.github.open_issue(service["repo"], "[aitomaton] %s" % issue["title"], body, cred["token"])
                 self.store.update_work(wid, status="done", result_url=url, ref=url)
+                sent = self._notify("report", "aitomaton %s: reported\n%s\n%s" % (
+                    issue["service"], issue["title"], url), issue["service"])
+                if sent:
+                    self.store.update_work(wid, note=sent)
             except Exception as e:
                 self.store.update_work(wid, note=credentials.redact("github: %s" % e, cred["token"]),
                                        status="failed")
@@ -543,7 +557,7 @@ class Engine:
         return {
             "aitomaton": __version__, "generated_at": iso(time.time()), "started_at": iso(self.started),
             "last_tick": iso(self.last_tick), "tick_error": self.tick_error,
-            "config": self.cfg.summary(),
+            "config": dict(self.cfg.summary(), notify=self.notifier.channels()),
             "sources": {
                 "sentry": {"enabled": self.sentry.enabled, "last_poll": iso(self.sentry.last_poll),
                            "error": self.sentry.error},

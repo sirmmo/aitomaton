@@ -103,7 +103,8 @@ function render(d) {
     chip("stairway · " + c.executor.agent, c.executor.stairway), chip("pre-clone with service credentials", c.executor.prepares_clone),
     chip("default policy: " + c.default_policy, true),
     chip("direct actions " + (c.emergency && c.emergency.act ? "on" : "off"), c.emergency && c.emergency.act),
-    chip("notify", c.emergency && c.emergency.notify),
+    chip("notify" + (c.notify ? [c.notify.telegram ? " · telegram ×" + c.notify.telegram : "", c.notify.webhook ? " · webhook" : ""].join("") : ""),
+         c.notify && (c.notify.telegram || c.notify.webhook)),
     chip("infrastructure" + (c.infrastructure && c.infrastructure.repo ? " → " + c.infrastructure.repo : ""), c.infrastructure && c.infrastructure.enabled, d.infrastructure && d.infrastructure.error),
   ].join("");
   const w = d.summary.works;

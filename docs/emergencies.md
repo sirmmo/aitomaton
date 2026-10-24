@@ -89,14 +89,14 @@ For services that pull private images, the swarm keeps the registry credentials 
 
 ## Notifications
 
-Set `AITOMATON_NOTIFY_URL` to a Slack-compatible incoming webhook. That covers Slack, Mattermost and
-Rocket.Chat; for Discord, append `/slack` to the webhook URL. aitomaton posts:
-- when an emergency is declared;
+During an emergency aitomaton posts:
+- when it is declared;
 - after each direct action;
 - when the runbook is exhausted;
-- when the emergency is over.
+- when it is over.
 
-Nothing is sent with `AITOMATON_DISPATCH=0`.
+See [notifications.md](notifications.md) for the Telegram bot and webhook setup. Nothing is sent with
+`AITOMATON_DISPATCH=0`.
 
 ## In status.json
 
