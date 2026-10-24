@@ -17,6 +17,9 @@ def tool(cmd):
     if cmd == "telegram-chats":
         if not n.token:
             sys.exit("set AITOMATON_TELEGRAM_TOKEN first, then write to the bot (or add it to a group)")
+        if n.cfg.telegram_intake != "off":
+            print("note: with the intake on, the running bot takes the updates first; it logs unknown chats and "
+                  "users, and answers them with their id")
         chats = n.telegram_chats()
         for chat, name in chats.items():
             print("%s\t%s" % (chat, name))
@@ -38,6 +41,12 @@ def main():
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     engine = Engine(Config())
     threading.Thread(target=engine.run_forever, name="loop", daemon=True).start()
+    if engine.cfg.telegram_intake != "off":
+        if engine.notifier.token:
+            from .telegram import TelegramBot
+            threading.Thread(target=TelegramBot(engine).run_forever, name="telegram", daemon=True).start()
+        else:
+            logging.getLogger("aitomaton").warning("AITOMATON_TELEGRAM_INTAKE is on but there is no bot token")
     serve(engine)
 
 

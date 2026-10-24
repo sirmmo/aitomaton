@@ -29,6 +29,7 @@ services:
 | `aitomaton.policy` | `AITOMATON_DEFAULT_POLICY` | `observe`, `report`, `pr` or `push`: the most aitomaton may do |
 | `aitomaton.policy.emergency` | `AITOMATON_EMERGENCY_POLICY`, else `aitomaton.policy` | the layer in force during an [emergency](emergencies.md), e.g. `push` or `pr+act` |
 | `aitomaton.notify.telegram` | — | more Telegram chats for this service's notifications, e.g. the team's group (`-100123` or `-100123/7` for a topic) |
+| `aitomaton.report.name` | — | the name people outside the team know it by. Telegram [reporters](telegram-intake.md) only see services that have one |
 | `aitomaton.act` | — | `false`: never run direct actions on this service, whatever a policy says |
 | `aitomaton.sentry.project` | the service's name, with or without the stack prefix | Sentry/urgentry project slugs, comma separated |
 | `aitomaton.architecture` | the stack namespace | group for architecture-wide analysis. Several stacks can share one |

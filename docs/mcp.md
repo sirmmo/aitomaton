@@ -90,6 +90,9 @@ Example answer:
 }
 ```
 
+Reports can also come through the Telegram bot, which asks for what is missing before it files them. See
+[telegram-intake.md](telegram-intake.md).
+
 ## Security
 
 - A token can read everything `status.json` shows (never secrets) and file reports. Give each person or bot

@@ -12,6 +12,7 @@ can be used at once.
 | `emergency` | an [emergency](emergencies.md) is declared, after each direct action, when the runbook is exhausted, when it is over |
 | `fix` | a fix ends: PR opened, pushed, no fix, failed |
 | `report` | a GitHub issue is opened |
+| `reported` | a person files a new report (through MCP, or a Telegram reporter) |
 
 Nothing is sent while `AITOMATON_DISPATCH=0`. The work's log still says "notification not sent: dispatch is off".
 Every work logs which channels were notified, or why a channel failed.
@@ -44,6 +45,8 @@ team's group. The same bot is used, so it must be a member of that group.
 The token is part of every Telegram API URL, so aitomaton redacts it from every error it logs or shows.
 `status.json` shows only how many chats are configured. For a self-hosted Bot API server, set
 `AITOMATON_TELEGRAM_API`.
+
+The same bot can also take reports: see [Reports through Telegram](telegram-intake.md).
 
 ## Webhook
 

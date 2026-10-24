@@ -15,7 +15,7 @@ the stack file. Per-service behaviour comes from [service labels](labels.md).
 | `AITOMATON_STATUS_TOKEN` | none | protects `/` and `/status.json` (`?token=` or `Authorization: Bearer`) |
 | `AITOMATON_MCP_TOKEN` | none | enables the [MCP server](mcp.md) at `/mcp`: `name:token`, comma separated |
 | `MCP_DECISION_WAIT_SECONDS` | `20` | how long `report_issue` waits for the decision before answering |
-| `MCP_REPORTS_PER_HOUR` | `60` | reports and observations per hour, all callers together |
+| `MCP_REPORTS_PER_HOUR` | `60` | reports and observations per hour, MCP and Telegram together, all callers together |
 
 ## Inputs
 
@@ -77,7 +77,11 @@ See [notifications.md](notifications.md).
 | `AITOMATON_TELEGRAM_CHAT` | none | chat ids, comma separated. `<chat>/<topic>` posts in a forum topic |
 | `AITOMATON_TELEGRAM_API` | `https://api.telegram.org` | or a self-hosted Bot API server |
 | `AITOMATON_NOTIFY_URL` | none | Slack-compatible incoming webhook (Slack, Mattermost, Rocket.Chat, Discord's `/slack`) |
-| `AITOMATON_NOTIFY_EVENTS` | `emergency,fix` | what is notified: `emergency`, `fix` (PR opened, pushed, failed), `report` (GitHub issue opened) |
+| `AITOMATON_NOTIFY_EVENTS` | `emergency,fix` | what is notified: `emergency`, `fix` (PR opened, pushed, failed), `report` (GitHub issue opened), `reported` (a person's new report, from MCP or a Telegram reporter) |
+| `AITOMATON_TELEGRAM_INTAKE` | `off` | the bot takes [reports](telegram-intake.md): `on` (operators and listed reporters) or `open` (anyone) |
+| `AITOMATON_TELEGRAM_OPERATORS` | none | user ids or `@usernames` treated as operators, besides the members of the notification chats |
+| `AITOMATON_TELEGRAM_REPORTERS` | none | user ids, `@usernames`, or group chat ids whose members may report |
+| `TELEGRAM_REPORTS_PER_HOUR` | `5` | reports and additions per reporter |
 
 ## Analysis
 

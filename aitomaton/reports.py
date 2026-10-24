@@ -66,6 +66,16 @@ def investigate(engine, issue, now=None):
     return out
 
 
+def check_rate(engine, now=None):
+    """MCP_REPORTS_PER_HOUR caps reports and additions from everyone together (MCP and Telegram)."""
+    now = now or time.time()
+    n = engine.store.q("SELECT COALESCE(SUM(count),0) n FROM occurrences WHERE key LIKE 'user:%' AND bucket>=?",
+                       (int((now - 3600) // 60),))[0]["n"]
+    if n >= engine.cfg.mcp_reports_per_hour:
+        raise ValueError("too many reports in the last hour (MCP_REPORTS_PER_HOUR=%d): try again later"
+                         % engine.cfg.mcp_reports_per_hour)
+
+
 def short(reps):
     return bool(reps and reps.get("desired") and (reps.get("running") or 0) < reps["desired"])
 

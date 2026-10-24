@@ -16,7 +16,7 @@ import time
 
 from . import __version__
 from .engine import iso
-from .reports import KINDS, SEVERITY_LEVEL
+from .reports import KINDS, SEVERITY_LEVEL, check_rate
 
 PROTOCOL = "2025-06-18"
 INSTRUCTIONS = (
@@ -223,11 +223,7 @@ class MCP:
                             "last_note": ((w["log"] or [{}])[-1]).get("note")} for w in works])
 
     def _rate(self):
-        n = self.engine.store.q("SELECT COALESCE(SUM(count),0) n FROM occurrences WHERE key LIKE 'user:%' AND bucket>=?",
-                                (int((time.time() - 3600) // 60),))[0]["n"]
-        if n >= self.engine.cfg.mcp_reports_per_hour:
-            raise ValueError("too many reports in the last hour (MCP_REPORTS_PER_HOUR=%d): try again later"
-                             % self.engine.cfg.mcp_reports_per_hour)
+        check_rate(self.engine)
 
     def t_report_issue(self, title, description, who, service=None, architecture=None, kind="other",
                        severity="medium", reporter=None, merge=True):

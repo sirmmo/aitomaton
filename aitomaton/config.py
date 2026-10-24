@@ -117,6 +117,13 @@ class Config:
         self.telegram_token = _env("AITOMATON_TELEGRAM_TOKEN")   # or the Docker secret aitomaton_telegram_token
         self.telegram_chats = _env("AITOMATON_TELEGRAM_CHAT", "")
         self.telegram_api = (_env("AITOMATON_TELEGRAM_API", "https://api.telegram.org")).rstrip("/")
+        # reports through the bot (telegram.py): off, on (operators and listed reporters), open (anyone)
+        self.telegram_intake = (_env("AITOMATON_TELEGRAM_INTAKE", "off")).lower()
+        if self.telegram_intake not in ("off", "on", "open"):
+            self.telegram_intake = "on" if self.telegram_intake in ("1", "true", "yes") else "off"
+        self.telegram_operators = _env("AITOMATON_TELEGRAM_OPERATORS", "")   # user ids or @usernames
+        self.telegram_reporters = _env("AITOMATON_TELEGRAM_REPORTERS", "")   # user ids, @usernames, group chat ids
+        self.telegram_reports_per_hour = _int("TELEGRAM_REPORTS_PER_HOUR", 5)
         self.notify_events = [e.strip() for e in _env("AITOMATON_NOTIFY_EVENTS", "emergency,fix").split(",")
                               if e.strip()]
 
@@ -159,6 +166,7 @@ class Config:
                           "act": self.act, "window_s": self.emergency_window,
                           "max_actions_per_hour": self.max_actions_per_hour},
             "mcp": bool(self.mcp_tokens),
+            "telegram_intake": self.telegram_intake,
             "laya": bool(self.laya_url),
             "chain": ["rules"] + self.chain,
             "jev": {"model": self.jev_model, "configured": bool(self.jev_model and (

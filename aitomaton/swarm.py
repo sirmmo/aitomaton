@@ -101,6 +101,7 @@ def descriptor(name, labels, prefix="aitomaton", default_policy="report"):
         "agent": g("agent"), "model": g("model"),
         "git_credential": g("git.credential"), "git_author": g("git.author"),
         "test": g("test"), "notes": g("notes"), "notify_telegram": g("notify.telegram"),
+        "report_name": g("report.name"),       # what people outside the team call it (Telegram reporters)
         # the deployment's repo, independent of aitomaton.enable: third-party images cannot be fixed upstream,
         # but their limits, tags and placement in your stack files can
         "infra": {"repo": normalize_repo(g("infra.repo")), "ref": g("infra.ref"), "path": g("infra.path"),

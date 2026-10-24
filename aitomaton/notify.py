@@ -4,7 +4,8 @@
   AITOMATON_TELEGRAM_CHAT    chat ids, comma separated; "<chat>/<topic>" posts in a forum topic
   aitomaton.notify.telegram  label: more chats for one service's notifications
   AITOMATON_NOTIFY_URL       Slack-compatible incoming webhook (Slack, Mattermost, Rocket.Chat, Discord's /slack)
-  AITOMATON_NOTIFY_EVENTS    which events notify: emergency, fix, report (default emergency,fix)
+  AITOMATON_NOTIFY_EVENTS    which events notify: emergency, fix, report, reported (a person's new report)
+                             (default emergency,fix)
 
 The bot token is part of every Telegram API URL, so it is redacted from every error that is logged or shown.
 """
@@ -15,7 +16,7 @@ import os
 from .credentials import redact
 from .http import request
 
-EVENTS = ("emergency", "fix", "report")
+EVENTS = ("emergency", "fix", "report", "reported")
 
 
 def telegram_token(cfg):

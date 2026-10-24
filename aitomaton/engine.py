@@ -95,11 +95,12 @@ class Engine:
         self._wake.set()
         return keys
 
-    # ------------------------------------------------------------ reports from people (MCP)
+    # ------------------------------------------------------------ reports from people (MCP, Telegram)
     def report_issue(self, title, description, service=None, architecture=None, kind="other", severity="medium",
-                     reporter=None, merge=True, now=None):
+                     reporter=None, merge=True, now=None, origin=None):
         """A person signals something no log shows. Returns the issue, merged into an open report of the same
-        kind on the same service when there is one (merge=True)."""
+        kind on the same service when there is one (merge=True). origin: where it came from, e.g.
+        {"via": "telegram", "role": "reporter"}, kept on the report."""
         now = now or time.time()
         kind = kind if kind in reports.KINDS else "other"
         severity = severity if severity in reports.SEVERITY_LEVEL else "medium"
@@ -110,8 +111,8 @@ class Engine:
             for i in self.store.q("SELECT * FROM issues WHERE source='user' AND status!='resolved' AND project=? "
                                   "AND last_seen>=? ORDER BY last_seen DESC", (kind, now - 3600)):
                 if (i["service"], i["architecture"]) == (name or arch or "unknown", arch):
-                    return dict(self.add_observation(i["key"], description, reporter, severity, now=now),
-                                merged=True)
+                    return dict(self.add_observation(i["key"], description, reporter, severity, now=now,
+                                                     origin=origin), merged=True)
         n = (self.store.get("user_reports", 0) or 0) + 1
         self.store.put("user_reports", n)
         key = "user:%s:%d" % (re.sub(r"[^\w.-]+", "-", name or arch or "unknown"), n)
@@ -120,19 +121,26 @@ class Engine:
             title=title[:300], culprit=reporter, level=reports.SEVERITY_LEVEL[severity], status="unresolved",
             first_seen=now, last_seen=now, total=1, users=1,
             detail={"kind": kind, "severity": severity, "description": (description or "")[:reports.MAX_TEXT],
-                    "reports": [{"at": now, "reporter": reporter, "text": (description or "")[:reports.MAX_TEXT]}]},
+                    "reports": [dict(origin or {}, at=now, reporter=reporter,
+                                     text=(description or "")[:reports.MAX_TEXT])]},
             flags={"fired_at": now})
         self.store.add_occurrence(key, now)
-        return self._investigated(key, now)
+        issue = self._investigated(key, now)
+        if (origin or {}).get("role") != "operator":    # operators writing from Telegram already know
+            self._notify("reported", "aitomaton: new report on %s (%s, %s) from %s\n%s\n%s" % (
+                issue["service"], kind, severity, reporter or "someone", title[:300],
+                "\n".join(issue["detail"]["investigation"]["summary"])), svc)
+        return issue
 
-    def add_observation(self, key, text, reporter=None, severity=None, now=None):
+    def add_observation(self, key, text, reporter=None, severity=None, now=None, origin=None):
         """Another report on the same issue: it happened again, got worse, or more is known."""
         now = now or time.time()
         i = self.store.issue(key)
         if not i or i["source"] != "user":
             raise KeyError("no reported issue %s" % key)
         det = i["detail"] or {}
-        rep = (det.get("reports") or []) + [{"at": now, "reporter": reporter, "text": (text or "")[:reports.MAX_TEXT]}]
+        rep = (det.get("reports") or []) + [dict(origin or {}, at=now, reporter=reporter,
+                                                 text=(text or "")[:reports.MAX_TEXT])]
         fields = {"detail": {"reports": rep[-50:]}, "last_seen": now, "total": (i["total"] or 0) + 1,
                   "users": len({r.get("reporter") or "anonymous" for r in rep})}
         if i["status"] == "resolved":

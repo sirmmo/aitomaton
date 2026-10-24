@@ -31,6 +31,7 @@ A webhook writes to the store and wakes the loop. Each tick runs every step in o
 | `emergency.py` | layered policies, emergency detection, the runbook of direct actions (Docker API writes) |
 | `reports.py` | issues reported by people: kinds, severities, the investigation |
 | `mcp.py` | the MCP server: status tools and reporting tools, Bearer tokens per caller |
+| `telegram.py` | the Telegram intake: a guided conversation that files reports, operators and reporters, follow-ups in the chat |
 | `analysis.py` | bursts, long-term trends, cascades; produces per-issue features and findings |
 | `deciders.py` | the prose state, rules, laya, JEV/LLM tiers, the chain, guard rails, policy cap |
 | `executors.py` | the brief, report bodies, result parsing, stairway MCP client, GitHub client |

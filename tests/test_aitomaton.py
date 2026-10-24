@@ -40,7 +40,8 @@ def cfg(**env):
             "AITOMATON_INFRA_POLICY_EMERGENCY": "", "AITOMATON_EMERGENCY_POLICY": "", "AITOMATON_ACT": "0",
             "AITOMATON_NOTIFY_URL": "", "AITOMATON_TELEGRAM_TOKEN": "", "AITOMATON_TELEGRAM_CHAT": "",
             "AITOMATON_NOTIFY_EVENTS": "", "AITOMATON_SECRETS_DIR": "/nonexistent", "AITOMATON_MCP_TOKEN": "",
-            "MCP_DECISION_WAIT_SECONDS": "0"}
+            "MCP_DECISION_WAIT_SECONDS": "0", "AITOMATON_TELEGRAM_INTAKE": "", "AITOMATON_TELEGRAM_OPERATORS": "",
+            "AITOMATON_TELEGRAM_REPORTERS": "", "TELEGRAM_REPORTS_PER_HOUR": ""}
     base.update(env)
     old = {k: os.environ.get(k) for k in base}
     os.environ.update(base)
@@ -891,6 +892,141 @@ class Telegram(Served):
         self.assertIn("EMERGENCY shop_web", FakeTelegram.calls[0][1]["text"])
         self.assertEqual(e.status()["config"]["notify"], {"telegram": 1, "webhook": False,
                                                           "events": ["emergency", "fix"]})
+
+
+class FakeBot:
+    """Records the Bot API calls; every message gets the next id."""
+    def __init__(self):
+        self.calls, self.n = [], 100
+
+    def __call__(self, method, payload, timeout=20):
+        self.calls.append((method, payload))
+        self.n += 1
+        return {"message_id": self.n}
+
+    def sent(self):
+        return [p for m, p in self.calls if m == "sendMessage"]
+
+    def last(self):
+        return self.sent()[-1]
+
+    def buttons(self):
+        return {b["text"]: b["callback_data"] for row in self.last()["reply_markup"]["inline_keyboard"] for b in row}
+
+
+class TelegramIntake(unittest.TestCase):
+    ADA = {"id": 7, "username": "ada", "first_name": "Ada"}
+    PUB = {"id": 99, "first_name": "Pat"}
+
+    def bot(self, **env):
+        from aitomaton.telegram import TelegramBot
+        c = cfg(AITOMATON_TELEGRAM_TOKEN="1:x", AITOMATON_TELEGRAM_CHAT="-100", AITOMATON_TELEGRAM_INTAKE="on",
+                AITOMATON_TELEGRAM_REPORTERS="99", **env)
+        shop = dict(descriptor("shop_web", {"com.docker.stack.namespace": "shop", "aitomaton.report.name": "Shop"}),
+                    id="w", replicas={"running": 1, "desired": 1})
+        e = Engine(c, Store(":memory:"), swarm_with(c, API, shop, DB))
+        api = FakeBot()
+        b = TelegramBot(e, api)
+        self.uid = 0
+        return e, b, api
+
+    def msg(self, b, user, text, chat=None, reply_to=None):
+        self.uid += 1
+        chat = chat or {"id": user["id"], "type": "private"}
+        m = {"message_id": self.uid, "from": user, "chat": chat, "text": text}
+        if reply_to:
+            m["reply_to_message"] = {"message_id": reply_to}
+        return b.handle({"update_id": self.uid, "message": m})
+
+    def press(self, b, user, data, chat=None):
+        chat = chat or {"id": user["id"], "type": "private"}
+        return b.handle({"update_id": 0, "callback_query": {"id": "q", "from": user, "data": data,
+                                                            "message": {"message_id": 1, "chat": chat}}})
+
+    def test_an_operator_report_is_guided_filed_and_followed_up(self):
+        e, b, api = self.bot(AITOMATON_TELEGRAM_OPERATORS="@ada")
+        self.msg(b, self.ADA, "shop_api checkout is very slow since 10:00")
+        # the service is named and the kind guessed: only the severity is asked
+        self.assertEqual(api.last()["text"], "How bad is it?")
+        self.assertIn("Critical: declare an emergency", api.buttons())
+        self.press(b, self.ADA, api.buttons()["High"])
+        self.assertIn("Service: shop_api\nKind: Slow\nSeverity: High", api.last()["text"])
+        self.press(b, self.ADA, api.buttons()["File it"])
+        i = e.store.q("SELECT * FROM issues WHERE source='user'")[0]
+        self.assertEqual((i["service"], i["project"], i["level"]), ("shop_api", "slowness", "error"))
+        self.assertEqual(i["detail"]["reports"][0]["reporter"], "tg:7 @ada")
+        self.assertEqual(i["detail"]["reports"][0]["role"], "operator")
+        self.assertTrue(api.last()["text"].startswith("Filed user:shop_api:1."))
+        filed = api.n
+        e.tick()
+        b.follow_up()
+        told = [p["text"] for p in api.sent()[-2:]]
+        self.assertTrue(told[0].startswith("Decision on user:shop_api:1: report, applied report"), told)
+        self.assertEqual(told[1], "Report for user:shop_api:1: written on the status page")
+        b.follow_up()
+        self.assertEqual(api.n, filed + 2, "each news is told once")
+        # a reply to the bot's message adds to the report
+        self.msg(b, self.ADA, "now 40 s", reply_to=filed)
+        self.assertEqual(e.store.issue(i["key"])["total"], 2)
+        self.press(b, self.ADA, "i|1|done")
+        self.assertEqual(e.store.issue(i["key"])["status"], "resolved")
+
+    def test_a_reporter_sees_public_names_and_no_internals(self):
+        e, b, api = self.bot()
+        self.msg(b, self.PUB, "/report")
+        self.assertEqual(api.last()["text"], "What is wrong? Say what you see, where, and since when.")
+        self.msg(b, self.PUB, "the page shows yesterday's prices")
+        self.assertEqual(api.last()["text"], "Where do you see it?")
+        self.assertEqual(list(api.buttons()), ["Shop", "Not sure / several"])     # no internal service names
+        self.press(b, self.PUB, api.buttons()["Shop"])
+        self.assertEqual(api.last()["text"], "How bad is it?")          # the kind (data) was guessed
+        self.assertNotIn("critical", " ".join(api.buttons().values()))  # reporters cannot page anyone
+        self.press(b, self.PUB, api.buttons()["I can't do what I need"])
+        self.press(b, self.PUB, api.buttons()["File it"])
+        self.assertEqual(api.last()["text"], "Thanks, your report is recorded as #1. I'll write here when there "
+                                             "is news.")
+        i = e.store.issue("user:shop_web:1")
+        self.assertEqual((i["project"], i["level"]), ("data", "error"))
+        e.tick()
+        b.follow_up()
+        self.assertNotIn("shop_web", " ".join(p["text"] for p in api.sent()))
+        self.msg(b, self.PUB, "/mine")
+        self.assertIn("#1 the page shows yesterday's prices", api.last()["text"])
+        self.msg(b, self.PUB, "/status")
+        self.assertNotIn("open issues", api.last()["text"])      # status is for operators
+        self.press(b, self.PUB, "i|1|done")                       # only they reported it: solved
+        b.follow_up()
+        self.assertEqual(e.store.issue(i["key"])["status"], "resolved")
+
+    def test_strangers_groups_buttons_and_limits(self):
+        e, b, api = self.bot(TELEGRAM_REPORTS_PER_HOUR="1")
+        self.msg(b, {"id": 5}, "hello")
+        self.assertIn("add your Telegram id 5", api.last()["text"])
+        n = api.n
+        group = {"id": -100, "type": "supergroup"}       # the notification chat: its members are operators
+        self.msg(b, {"id": 6}, "lunch?", chat=group)
+        self.assertEqual(api.n, n, "group chatter is ignored")
+        self.msg(b, {"id": 6}, "/report@aitomaton_bot", chat=group)
+        self.assertEqual(api.last()["reply_markup"], {"force_reply": True, "selective": True})
+        prompt = api.n
+        self.msg(b, {"id": 6}, "the map is down", chat=group)                 # not a reply: not seen
+        self.assertEqual(api.n, prompt)
+        self.msg(b, {"id": 6}, "the map is down", chat=group, reply_to=prompt)
+        self.assertEqual(api.last()["text"], "Which service? None is named in the report.")
+        self.press(b, {"id": 8}, api.buttons()["Not sure / several"], chat=group)   # someone else's report
+        self.assertEqual(api.calls[-1][0], "answerCallbackQuery")
+        self.assertIn("Not your report", api.calls[-1][1]["text"])
+        self.press(b, {"id": 6}, api.buttons()["Type the name"], chat=group)
+        self.msg(b, {"id": 6}, "shop_apj", chat=group, reply_to=api.n)
+        self.assertEqual(list(api.buttons())[0], "shop_api")                  # did you mean
+        # a reporter's second report in the hour is refused
+        for text in ("checkout fails", "checkout still fails"):
+            self.msg(b, self.PUB, "/cancel")
+            self.msg(b, self.PUB, "/report Shop: " + text)
+            self.press(b, self.PUB, api.buttons()["Minor"])
+            self.press(b, self.PUB, api.buttons()["File it"])
+        self.assertIn("try again later", api.last()["text"])
+        self.assertEqual(len(e.store.q("SELECT * FROM issues WHERE source='user'")), 1)
 
 
 class McpServer(Served):
